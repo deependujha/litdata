@@ -34,6 +34,12 @@ jobs:
             const replyTemplate = fs.readFileSync(path, 'utf8');
             const username = context.payload.comment.user.login;
             const prNumber = context.payload.issue.number;
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.issue.number,
+            });
+            const branch = pr.data.head.ref;
 
             // Replace placeholders
             const reply = replyTemplate
@@ -49,12 +55,13 @@ jobs:
 
             core.setOutput("comment_id", response.data.id);
             core.setOutput("prNumber", prNumber);
+            core.setOutput("branch", branch);
             core.setOutput("username", username);
 
       - name: run python
         run: |
           pip install -U lightning-sdk
-          python .github/benchmark/benchmark.py --pr ${{ steps.comment.outputs.prNumber }}
+          python .github/benchmark/benchmark.py --pr ${{ steps.comment.outputs.prNumber }} --branch ${{ steps.comment.outputs.branch }}
         env: # the following values are parsed from the repository secrets
           LIGHTNING_USER_ID: ${{ secrets.LIGHTNING_USER_ID }}
           LIGHTNING_API_KEY: ${{ secrets.LIGHTNING_API_KEY }}

@@ -18,6 +18,7 @@ class BenchmarkArgs:
     """Arguments for the LitData benchmark."""
 
     pr_number: int
+    pr_name: str
     org: Optional[str]
     user: Optional[str]
     teamspace: str
@@ -28,6 +29,7 @@ def parse_args() -> BenchmarkArgs:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Benchmark LitData in CI.")
     parser.add_argument("--pr", type=int, required=True, help="GitHub PR number")
+    parser.add_argument("--branch", type=str, required=True, help="GitHub PR branch name")
     parser.add_argument("--user", default=DEFAULT_USER, type=str, help="Lightning Studio username")
     parser.add_argument("--org", default=DEFAULT_ORG, type=str, help="Lightning Studio org")
     parser.add_argument("--teamspace", default=DEFAULT_TEAMSPACE, type=str, help="Lightning Studio teamspace")
@@ -45,6 +47,7 @@ def parse_args() -> BenchmarkArgs:
 
     return BenchmarkArgs(
         pr_number=args.pr,
+        pr_name=args.branch,
         user=args.user,
         org=args.org,
         teamspace=args.teamspace,
@@ -63,6 +66,7 @@ class LitDataBenchmark:
             raise ValueError("Only one of user or org must be provided.")
 
         self.pr = config.pr_number
+        self.pr_name = config.pr_name
         self.teamspace = config.teamspace
         self.user = config.user
         self.org = config.org
@@ -92,11 +96,14 @@ class LitDataBenchmark:
     def setup_litdata_pr(self) -> None:
         """Set up the LitData PR in the studio."""
         assert self.studio is not None, "Studio is not set up"
+
+        # don't use `gh` cli, as it requires to login
         commands = [
-            "rm -rf lit*",
+            "rm -rf lit*(N)",
             "git clone https://github.com/Lightning-AI/litData.git",
             "cd litData",
-            f"gh pr checkout {self.pr}",
+            f"git fetch origin pull/{self.pr}/head:{self.pr_name}",
+            f"git checkout {self.pr_name}",
             "make setup",
         ]
         final_command = " && ".join(commands)
@@ -134,7 +141,6 @@ def main():
     print(f"Running LitData benchmark for PR #{config}")
     benchmark = LitDataBenchmark(config)
     benchmark.run()
-    benchmark.studio.stop()
     print(f"✅ Benchmark completed for PR #{config.pr_number}")
 
 
