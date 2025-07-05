@@ -126,6 +126,11 @@ def optimize_ultralytics_dataset(
         else:
             raise ValueError(f"Mode '{mode}' not found in dataset configuration.")
 
+    # convert path to string if it's a Path object
+    for key, value in dataset_config.items():
+        if isinstance(value, Path):
+            dataset_config[key] = str(value)
+
     # save the updated YAML file
     with open("litdata_" + yaml_path, "w") as f:
         yaml.dump(dataset_config, f)

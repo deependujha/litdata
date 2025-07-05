@@ -418,7 +418,6 @@ class StreamingDataset(IterableDataset):
         self.worker_next_chunk_index += 1
 
     def __getitem__(self, index: Union[ChunkedIndex, int, slice]) -> Any:
-        print(f"get item: {index=}")
         if self.cache is None:
             self.worker_env = _WorkerEnv.detect()
             self.cache = self._create_cache(worker_env=self.worker_env)
