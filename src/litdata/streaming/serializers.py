@@ -364,6 +364,7 @@ class PickleSerializer(Serializer):
         return pickle.dumps(item), None
 
     def deserialize(self, data: bytes) -> Any:
+        print(f"pickle deserialize: {data=}")
         return pickle.loads(data)  # noqa: S301
 
     def can_serialize(self, _: Any) -> bool:
