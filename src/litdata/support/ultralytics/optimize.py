@@ -38,11 +38,8 @@ def _ultralytics_optimize_fn(img_path: str):
     # read label file if it exists, else raise an error
     if os.path.isfile(label_path):
         with open(label_path) as f:
-            for line in f:
-                label += line.strip() + "\n"
-                # line = line.strip().split(" ")
-                # line_data = [int(line[0])] + [float(x) for x in line[1:]]
-                # label.append(line_data)
+            # don't convert to lists, as labels might've different lengths and hence config won't be same for all images
+            label = f.read().strip()  # read the entire file content as a single string
     else:
         raise FileNotFoundError(f"Label file not found: {label_path}")
 
