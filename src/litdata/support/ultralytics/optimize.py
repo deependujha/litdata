@@ -24,11 +24,11 @@ from litdata.streaming.resolver import Dir, _resolve_dir
 
 def _ultralytics_optimize_fn(img_path: str):
     """Internal function that will be passed to the `optimize` function."""
-    # from PIL import Image
+    from PIL import Image
 
-    # img = Image.open(img_path)
-    # if not img_path.endswith((".jpg", ".jpeg", ".png")):
-    #     raise ValueError(f"Unsupported image format: {img_path}. Supported formats are .jpg, .jpeg, and .png.")
+    img = Image.open(img_path)
+    if not img_path.endswith((".jpg", ".jpeg", ".png")):
+        raise ValueError(f"Unsupported image format: {img_path}. Supported formats are .jpg, .jpeg, and .png.")
 
     img_ext = os.path.splitext(img_path)[-1].lower()  # get the file extension
 
@@ -47,7 +47,7 @@ def _ultralytics_optimize_fn(img_path: str):
         raise FileNotFoundError(f"Label file not found: {label_path}")
 
     return {
-        "image": img_path,
+        "image": img,
         "label": label,
     }
 
