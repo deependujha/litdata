@@ -22,7 +22,7 @@ from litdata.processing.functions import optimize
 from litdata.streaming.resolver import Dir, _resolve_dir
 
 
-def _ultralytics_optimize_fn(img_path: str) -> Dict:
+def _ultralytics_optimize_fn(img_path: str) -> Optional[Dict]:
     """Internal function that will be passed to the `optimize` function."""
     from PIL import Image
 
