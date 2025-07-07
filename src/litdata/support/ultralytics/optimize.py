@@ -41,6 +41,7 @@ def _ultralytics_optimize_fn(img_path: str) -> Dict:
             # don't convert to lists, as labels might've different lengths and hence config won't be same for all images
             label = f.read().strip()  # read the entire file content as a single string
     else:
+        return None
         raise FileNotFoundError(f"Label file not found: {label_path}")
 
     return {
@@ -88,7 +89,6 @@ def optimize_ultralytics_dataset(
 
     # parse the YAML file & make sure data exists, else download it
     dataset_config = check_det_dataset(yaml_path)
-    print(f"checked dataset structure: {dataset_config=}")
 
     output_dir = _resolve_dir(output_dir)
 
@@ -136,16 +136,13 @@ def optimize_ultralytics_dataset(
 def get_output_dir(output_dir: Dir, mode: str) -> Dir:
     if not isinstance(output_dir, Dir):
         raise TypeError(f"Expected output_dir to be of type Dir, got {type(output_dir)} instead.")
-    print(f"Using output_dir: {output_dir}")
     url, path = output_dir.url, output_dir.path
     if url is not None:
         url = url.rstrip("/") + f"/{mode}"
     if path is not None:
         path = os.path.join(path, f"{mode}")
 
-    updated_output_dir = Dir(url=url, path=path)
-    print(f"Updated output_dir for mode '{mode}': {updated_output_dir}")
-    return updated_output_dir
+    return Dir(url=url, path=path)
 
 
 def list_all_files(path: str) -> list[str]:
