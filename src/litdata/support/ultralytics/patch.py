@@ -16,7 +16,7 @@ from typing import Dict
 from litdata.constants import _ULTRALYTICS_AVAILABLE
 
 
-def patch_ultralytics():
+def patch_ultralytics() -> None:
     """Patch Ultralytics to use the LitData optimize function."""
     if not _ULTRALYTICS_AVAILABLE:
         raise ImportError("Ultralytics is not available. Please install it to use this functionality.")

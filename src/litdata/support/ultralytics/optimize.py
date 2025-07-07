@@ -13,7 +13,7 @@
 
 import os
 from pathlib import Path
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 import yaml
 
@@ -22,7 +22,7 @@ from litdata.processing.functions import optimize
 from litdata.streaming.resolver import Dir, _resolve_dir
 
 
-def _ultralytics_optimize_fn(img_path: str):
+def _ultralytics_optimize_fn(img_path: str) -> Dict:
     """Internal function that will be passed to the `optimize` function."""
     from PIL import Image
 
@@ -105,7 +105,7 @@ def optimize_ultralytics_dataset(
         optimize(
             fn=_ultralytics_optimize_fn,
             inputs=inputs,
-            output_dir=mode_output_dir,
+            output_dir=mode_output_dir.url or mode_output_dir.path or "optimized_data",
             chunk_bytes=chunk_bytes,
             chunk_size=chunk_size,
             num_workers=num_workers,
