@@ -24,9 +24,13 @@ from litdata.streaming.resolver import Dir, _resolve_dir
 
 def _ultralytics_optimize_fn(img_path: str) -> Optional[Dict]:
     """Internal function that will be passed to the `optimize` function."""
-    from PIL import Image
+    # from PIL import Image
+    # from torchvision.io import read_image
+    import cv2
 
-    img = Image.open(img_path)
+    # img = Image.open(img_path)
+    # img = read_image(img_path)
+    img = cv2.imread(img_path)
     if not img_path.endswith((".jpg", ".jpeg", ".png")):
         raise ValueError(f"Unsupported image format: {img_path}. Supported formats are .jpg, .jpeg, and .png.")
 
@@ -45,7 +49,7 @@ def _ultralytics_optimize_fn(img_path: str) -> Optional[Dict]:
         raise FileNotFoundError(f"Label file not found: {label_path}")
 
     return {
-        "image": img,
+        "img": img,
         "label": label,
     }
 
@@ -127,7 +131,7 @@ def optimize_ultralytics_dataset(
     for key, value in dataset_config.items():
         if isinstance(value, Path):
             dataset_config[key] = str(value)
-
+    dataset_config[""]
     # save the updated YAML file
     with open("litdata_" + yaml_path, "w") as f:
         yaml.dump(dataset_config, f)

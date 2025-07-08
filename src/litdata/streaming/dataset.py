@@ -63,6 +63,9 @@ class StreamingDataset(IterableDataset):
         index_path: Optional[str] = None,
         force_override_state_dict: bool = False,
         transform: Optional[Union[Callable, List[Callable]]] = None,
+        transform_kwargs: Optional[Dict[str, Any]] = None,
+        *args: Any,
+        **kwargs: Any,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
@@ -90,6 +93,9 @@ class StreamingDataset(IterableDataset):
                 If `index_path` is a full file path, it will use that directly.
             force_override_state_dict: Boolean flag for allowing local arguments to override a loaded state dict.
             transform: Optional transformation function or list of functions to apply to each item in the dataset.
+            transform_kwargs: Keyword arguments for the transformation function.
+            args: Additional positional arguments.
+            kwargs: Additional keyword arguments.
         """
         _check_version_and_prompt_upgrade(__version__)
 
@@ -203,6 +209,7 @@ class StreamingDataset(IterableDataset):
                 if not callable(t):
                     raise ValueError(f"Transform should be a callable. Found {t}")
             self.transform = transform
+        self.transform_kwargs = transform_kwargs or {}
         self._on_demand_bytes = True  # true by default, when iterating, turn this off to store the chunks in the cache
 
     @property
@@ -444,21 +451,21 @@ class StreamingDataset(IterableDataset):
             )
         )
         if hasattr(self, "transform"):
+            self.transform_kwargs["index"] = index.index
             if isinstance(self.transform, list):
                 for transform_fn in self.transform:
-                    sig = inspect.signature(transform_fn)
-                    if any(
-                        p.kind in (p.KEYWORD_ONLY, p.VAR_KEYWORD) or p.name == "index" for p in sig.parameters.values()
-                    ):
-                        item = transform_fn(item, index=index.index)
-                    else:
-                        item = transform_fn(item)
+                    signature = inspect.signature(transform_fn)
+                    accepts_kwargs = any(
+                        param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
+                    )
+                    item = transform_fn(item, **self.transform_kwargs) if accepts_kwargs else transform_fn(item)
             else:
-                sig = inspect.signature(self.transform)
-                if any(p.kind in (p.KEYWORD_ONLY, p.VAR_KEYWORD) or p.name == "index" for p in sig.parameters.values()):
-                    item = self.transform(item, index=index.index)
-                else:
-                    item = self.transform(item)
+                # check if transform function accepts kwargs
+                signature = inspect.signature(transform_fn)
+                accepts_kwargs = any(
+                    param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
+                )
+                item = self.transform(item, **self.transform_kwargs) if accepts_kwargs else self.transform(item)
         return item
 
     def __next__(self) -> Any:

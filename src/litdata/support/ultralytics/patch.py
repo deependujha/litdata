@@ -10,9 +10,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import math
 import os
 from functools import partial
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -43,6 +44,11 @@ def patch_ultralytics() -> None:
     DetectionTrainer.plot_training_samples = patch_detection_plot_training_samples
     DetectionTrainer.plot_training_labels = patch_none_function
 
+    from ultralytics.models.yolo.detect.val import DetectionValidator
+
+    DetectionValidator.plot_val_samples = patch_detection_plot_val_samples
+    DetectionValidator.plot_predictions = patch_detection_plot_predictions
+
     # Patch BaseDataset globally
     import ultralytics.data.base as base_module
     import ultralytics.data.dataset as child_modules
@@ -56,6 +62,10 @@ def patch_ultralytics() -> None:
 
     build_dataloader.__code__ = patch_build_dataloader.__code__
 
+    from ultralytics.data.augment import Compose
+
+    Compose.__call__.__code__ = patch_compose_transform_call.__code__
+
     print("✅ Ultralytics successfully patched to use LitData.")
 
 
@@ -65,11 +75,15 @@ def patch_check_det_dataset(dataset: str, _: bool = True) -> Dict:
 
     import yaml
 
+    if not dataset.startswith("litdata_"):
+        dataset = "litdata_" + dataset
+
+    if not os.path.isfile(dataset):
+        raise FileNotFoundError(f"Dataset file not found: {dataset}")
+
     # read the yaml file
     with open(dataset) as file:
-        data = yaml.safe_load(file)
-    print(f"patch successful for {dataset}")
-    return data
+        return yaml.safe_load(file)
 
 
 def patch_build_dataloader(
@@ -144,7 +158,10 @@ if _ULTRALYTICS_AVAILABLE:
                 transform=[
                     ultralytics_detection_transform,
                     partial(self.transform_update_label, classes),
+                    self.update_labels_info,
+                    self.transforms,
                 ],
+                transform_kwargs={"img_size": self.imgsz, "channels": self.channels},
             )
             self.ni = len(self.streaming_dataset)
             self.buffer = list(range(len(self.streaming_dataset)))
@@ -245,7 +262,6 @@ if _ULTRALYTICS_AVAILABLE:
                 include_class=self.classes,
                 label=data,
             )
-            print("-" * 100)
             return self.transforms(data)
 
     def patch_detection_plot_training_samples(self, batch: Dict[str, Any], ni: int) -> None:
@@ -263,6 +279,53 @@ if _ULTRALYTICS_AVAILABLE:
             on_plot=self.on_plot,
         )
 
+    def patch_detection_plot_val_samples(self: Any, batch: Dict[str, Any], ni: int) -> None:
+        """Plot validation image samples.
+
+        Args:
+            self: DetectionValidator instance.
+            batch (Dict[str, Any]): Batch containing images and annotations.
+            ni (int): Batch index.
+        """
+        plot_images(
+            labels=batch,
+            images=batch["img"],
+            fname=self.save_dir / f"val_batch{ni}_labels.jpg",
+            names=self.names,
+            on_plot=self.on_plot,
+        )
+
+    def patch_detection_plot_predictions(
+        self: Any, batch: Dict[str, Any], preds: List[Dict[str, torch.Tensor]], ni: int, max_det: Optional[int] = None
+    ) -> None:
+        """Plot predicted bounding boxes on input images and save the result.
+
+        Args:
+            self: DetectionValidator instance.
+            batch (Dict[str, Any]): Batch containing images and annotations.
+            preds (List[Dict[str, torch.Tensor]]): List of predictions from the model.
+            ni (int): Batch index.
+            max_det (Optional[int]): Maximum number of detections to plot.
+        """
+        from ultralytics.utils import ops
+
+        # TODO: optimize this
+        for i, pred in enumerate(preds):
+            pred["batch_idx"] = torch.ones_like(pred["conf"]) * i  # add batch index to predictions
+        keys = preds[0].keys()
+        max_det = max_det or self.args.max_det
+        batched_preds = {k: torch.cat([x[k][:max_det] for x in preds], dim=0) for k in keys}
+        # TODO: fix this
+        batched_preds["bboxes"][:, :4] = ops.xyxy2xywh(batched_preds["bboxes"][:, :4])  # convert to xywh format
+        plot_images(
+            images=batch["img"],
+            labels=batched_preds,
+            paths=None,
+            fname=self.save_dir / f"val_batch{ni}_pred.jpg",
+            names=self.names,
+            on_plot=self.on_plot,
+        )  # pred
+
     def patch_detection_plot_training_labels(self) -> None:
         """Create a labeled training plot of the YOLO model."""
         pass
@@ -275,40 +338,92 @@ if _ULTRALYTICS_AVAILABLE:
         """A placeholder function that does nothing."""
         pass
 
+    def image_resize(
+        im: Any, imgsz: int, rect_mode: bool = True, augment: bool = True
+    ) -> Tuple[Any, Tuple[int, int], Tuple[int, int]]:
+        """Resize the image to a fixed size.
+
+        Args:
+            im (Any): Image to resize.
+            imgsz (int): Target size for resizing.
+            rect_mode (bool): Whether to use rectangle mode for resizing.
+            augment (bool): If True, data augmentation is applied.
+
+        Returns:
+            Tuple[Any, Tuple[int, int], Tuple[int, int]]: Resized image and its original dimensions.
+        """
+        import cv2
+
+        # Custom logic for resizing the image
+        h0, w0 = im.shape[:2]  # orig hw
+        if rect_mode:  # resize long side to imgsz while maintaining aspect ratio
+            r = imgsz / max(h0, w0)  # ratio
+            if r != 1:  # if sizes are not equal
+                w, h = (min(math.ceil(w0 * r), imgsz), min(math.ceil(h0 * r), imgsz))
+                im = cv2.resize(im, (w, h), interpolation=cv2.INTER_LINEAR)
+        elif not (h0 == w0 == imgsz):  # resize by stretching image to square imgsz
+            im = cv2.resize(im, (imgsz, imgsz), interpolation=cv2.INTER_LINEAR)
+        if im.ndim == 2:
+            im = im[..., None]
+
+        return im, (h0, w0), im.shape[:2]  # im, hw_original, hw_resized
+
+    def patch_compose_transform_call(self: Any, data: Any) -> Any:
+        """Apply all transforms to the data, skipping mix transforms."""
+        from ultralytics.data.augment import BaseMixTransform
+
+        for t in self.transforms:
+            if isinstance(t, BaseMixTransform):
+                continue  # Skip mix transforms, they are applied separately
+            data = t(data)
+        return data
+
 # ------- helper transformations -------
 
 
-def ultralytics_detection_transform(data: Dict[str, Any], index: int) -> Dict[str, Any]:
+def ultralytics_detection_transform(data: Dict[str, Any], **kwargs: Any) -> Dict[str, Any]:
     """Transform function for YOLO detection datasets.
 
     Args:
         data (Dict[str, Any]): Input data containing image and label.
-        index (int): Index of the data item.
+        kwargs (Dict[str, Any]): Additional keyword arguments, including the index of the data item.
 
     Returns:
         Dict[str, Any]: Transformed data with image and label.
     """
+    index = kwargs.get("index")
+    channels = kwargs.get("channels", 3)  # default to 3 channels (RGB)
     if index is None:
         raise ValueError("Index must be provided for YOLO detection transform.")
+
     label = data["label"]
     # split label on the basis of `\n` and then split each line on the basis of ` `
     # first element is class, rest are bbox coordinates
     if isinstance(label, str):
         label = label.split("\n")
         label = [line.split(" ") for line in label if line.strip()]
-        print(f"label={label}")
+        img, ori_shape, resized_shape = image_resize(
+            data["img"], imgsz=kwargs.get("img_size", 640), rect_mode=True, augment=True
+        )
+        ratio_pad = (
+            resized_shape[0] / ori_shape[0],
+            resized_shape[1] / ori_shape[1],
+        )  # for evaluation
 
         data = {
-            "batch_idx": torch.Tensor([index]),  # ← add this!
-            "img": data["image"],
-            "cls": torch.Tensor([int(line[0]) for line in label]),
-            "bboxes": torch.Tensor([[float(coord) for coord in line[1:]] for line in label]),
+            "batch_idx": np.array([index]),  # ← add this!
+            "img": img,
+            "cls": np.array([[int(line[0])] for line in label]),
+            "bboxes": np.array([[float(coord) for coord in line[1:]] for line in label]),
             "normalized": True,
             "segments": [],
             "keypoints": None,
             "bbox_format": "xywh",
+            "ori_shape": ori_shape,
+            "resized_shape": resized_shape,
+            "ratio_pad": ratio_pad,
+            "channels": channels,
         }
-        print(f"{data=}")
     else:
         raise ValueError("Label must be a string in YOLO format.")
 
