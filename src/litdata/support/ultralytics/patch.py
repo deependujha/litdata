@@ -118,10 +118,13 @@ def patch_build_dataloader(
     batch = min(batch, len(dataset))
     num_devices = torch.cuda.device_count()  # number of CUDA devices
     num_workers = min(os.cpu_count() // max(num_devices, 1), workers)  # number of workers
+    num_workers = int(os.getenv("UL_NUM_WORKERS", num_workers))  # get from environment variable if set
+    persistent_workers = bool(int(os.getenv("UL_PERSISTENT_WORKERS", 0)))
     return StreamingDataLoader(
         dataset=dataset.streaming_dataset,
         batch_size=batch,
         num_workers=num_workers,
+        persistent_workers=persistent_workers,
         pin_memory=PIN_MEMORY,
         collate_fn=getattr(dataset, "collate_fn", None),
         drop_last=drop_last,

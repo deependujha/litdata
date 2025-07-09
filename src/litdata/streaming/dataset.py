@@ -461,7 +461,7 @@ class StreamingDataset(IterableDataset):
                     item = transform_fn(item, **self.transform_kwargs) if accepts_kwargs else transform_fn(item)
             else:
                 # check if transform function accepts kwargs
-                signature = inspect.signature(transform_fn)
+                signature = inspect.signature(self.transform)
                 accepts_kwargs = any(
                     param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
                 )
