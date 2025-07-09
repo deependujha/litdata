@@ -117,8 +117,7 @@ def patch_build_dataloader(
 
     batch = min(batch, len(dataset))
     num_devices = torch.cuda.device_count()  # number of CUDA devices
-    num_workers = min(os.cpu_count() // max(num_devices, 1), workers)  # number of workers
-    num_workers = int(os.getenv("UL_NUM_WORKERS", num_workers))  # get from environment variable if set
+    num_workers = min((os.cpu_count() or 1) // max(num_devices, 1), workers)  # number of workers
     persistent_workers = bool(int(os.getenv("UL_PERSISTENT_WORKERS", 0)))
     return StreamingDataLoader(
         dataset=dataset.streaming_dataset,
@@ -131,32 +130,17 @@ def patch_build_dataloader(
     )
 
 
-class TransformedStreamingDataset(StreamingDataset):
-    def transform(self, x, *args, **kwargs):
-        """Apply transformations to the data.
-
-        Args:
-            x: Data to transform.
-            *args: Additional positional arguments.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            Transformed data.
-        """
-        ...
-
-
 if _ULTRALYTICS_AVAILABLE:
     from ultralytics.data.base import BaseDataset as UltralyticsBaseDataset
     from ultralytics.utils.plotting import plot_images
 
     class PatchedUltralyticsBaseDataset(UltralyticsBaseDataset):
-        def __init__(self, img_path: str, classes: Optional[List[int]] = None, *args, **kwargs):
+        def __init__(self: Any, img_path: str, classes: Optional[List[int]] = None, *args: Any, **kwargs: Any):
             print("patched ultralytics dataset: 🔥")
             self.litdata_dataset = img_path
             self.classes = classes
             super().__init__(img_path, classes=classes, *args, **kwargs)
-            self.streaming_dataset = TransformedStreamingDataset(
+            self.streaming_dataset = StreamingDataset(
                 img_path,
                 transform=[
                     ultralytics_detection_transform,
@@ -169,44 +153,46 @@ if _ULTRALYTICS_AVAILABLE:
             self.ni = len(self.streaming_dataset)
             self.buffer = list(range(len(self.streaming_dataset)))
 
-        def __len__(self):
+        def __len__(self: Any) -> int:
             """Return the length of the dataset."""
             return len(self.streaming_dataset)
 
-        def get_image_and_label(self, index):
+        def get_image_and_label(self: Any, index: int) -> None:
             # Your custom logic to load from .litdata
             # e.g. use `self.litdata_dataset[index]`
             raise NotImplementedError("Custom logic here")
 
-        def get_img_files(self, img_path: Union[str, List[str]]) -> List[str]:
+        def get_img_files(self: Any, img_path: Union[str, List[str]]) -> List[str]:
             """Let this method return an empty list to avoid errors."""
             return []
 
-        def get_labels(self) -> List[Dict[str, Any]]:
+        def get_labels(self: Any) -> List[Dict[str, Any]]:
             # this is used to get number of images (ni) in the BaseDataset class
             return []
 
-        def cache_images(self) -> None:
+        def cache_images(self: Any) -> None:
             pass
 
-        def cache_images_to_disk(self, i: int) -> None:
+        def cache_images_to_disk(self: Any, i: int) -> None:
             pass
 
-        def check_cache_disk(self, safety_margin: float = 0.5) -> bool:
+        def check_cache_disk(self: Any, safety_margin: float = 0.5) -> bool:
             """Check if the cache disk is available."""
             # This method is not used in the streaming dataset, so we can return True
             return True
 
-        def check_cache_ram(self, safety_margin: float = 0.5) -> bool:
+        def check_cache_ram(self: Any, safety_margin: float = 0.5) -> bool:
             """Check if the cache RAM is available."""
             # This method is not used in the streaming dataset, so we can return True
             return True
 
-        def update_labels(self, *args, **kwargs):
+        def update_labels(self: Any, *args: Any, **kwargs: Any) -> None:
             """Do nothing, we will update labels when item is fetched in transform."""
             pass
 
-        def transform_update_label(self, include_class: Optional[List[int]], label: Dict, *args, **kwargs) -> Dict:
+        def transform_update_label(
+            self: Any, include_class: Optional[List[int]], label: Dict, *args: Any, **kwargs: Any
+        ) -> Dict:
             """Update labels to include only specified classes.
 
             Args:
@@ -234,7 +220,7 @@ if _ULTRALYTICS_AVAILABLE:
 
             return label
 
-        def __getitem__(self, index: int) -> Dict[str, Any]:
+        def __getitem__(self: Any, index: int) -> Dict[str, Any]:
             """Return transformed label information for given index."""
             # return self.transforms(self.get_image_and_label(index))
             if not hasattr(self, "streaming_dataset"):
@@ -249,7 +235,7 @@ if _ULTRALYTICS_AVAILABLE:
                 label = [line.split(" ") for line in label if line.strip()]
 
                 data = {
-                    "batch_idx": torch.Tensor([index], dtype=torch.int32),  # ← add this!
+                    "batch_idx": torch.tensor([index], dtype=torch.int32),  # ← add this!
                     "img": data["image"],
                     "cls": torch.Tensor([int(line[0]) for line in label]),
                     "bboxes": torch.Tensor([[float(coord) for coord in line[1:]] for line in label]),
@@ -267,7 +253,7 @@ if _ULTRALYTICS_AVAILABLE:
             )
             return self.transforms(data)
 
-    def patch_detection_plot_training_samples(self, batch: Dict[str, Any], ni: int) -> None:
+    def patch_detection_plot_training_samples(self: Any, batch: Dict[str, Any], ni: int) -> None:
         """Plot training samples with their annotations.
 
         Args:
@@ -329,15 +315,15 @@ if _ULTRALYTICS_AVAILABLE:
             on_plot=self.on_plot,
         )  # pred
 
-    def patch_detection_plot_training_labels(self) -> None:
+    def patch_detection_plot_training_labels(self: Any) -> None:
         """Create a labeled training plot of the YOLO model."""
         pass
 
-    def patch_get_labels(self) -> List[Dict[str, Any]]:
+    def patch_get_labels(self: Any) -> List[Dict[str, Any]]:
         # this is used to get number of images (ni) in the BaseDataset class
         return []
 
-    def patch_none_function(*args, **kwargs):
+    def patch_none_function(*args: Any, **kwargs: Any) -> None:
         """A placeholder function that does nothing."""
         pass
 
