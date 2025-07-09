@@ -235,7 +235,7 @@ if _ULTRALYTICS_AVAILABLE:
                 label = [line.split(" ") for line in label if line.strip()]
 
                 data = {
-                    "batch_idx": torch.tensor([index], dtype=torch.int32),  # ← add this!
+                    "batch_idx": torch.tensor([index], dtype=torch.int32),
                     "img": data["image"],
                     "cls": torch.Tensor([int(line[0]) for line in label]),
                     "bboxes": torch.Tensor([[float(coord) for coord in line[1:]] for line in label]),
