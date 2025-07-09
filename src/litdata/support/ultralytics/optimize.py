@@ -23,30 +23,38 @@ from litdata.streaming.resolver import Dir, _resolve_dir
 
 
 def _ultralytics_optimize_fn(img_path: str) -> Optional[Dict]:
-    """Internal function that will be passed to the `optimize` function."""
-    # from PIL import Image
-    # from torchvision.io import read_image
-    import cv2
-
-    # img = Image.open(img_path)
-    # img = read_image(img_path)
-    img = cv2.imread(img_path)
+    """Optimized function for Ultralytics that reads image + label and optionally re-encodes to reduce size."""
     if not img_path.endswith((".jpg", ".jpeg", ".png")):
         raise ValueError(f"Unsupported image format: {img_path}. Supported formats are .jpg, .jpeg, and .png.")
 
-    img_ext = os.path.splitext(img_path)[-1].lower()  # get the file extension
+    import cv2
 
+    img_ext = os.path.splitext(img_path)[-1].lower()
+
+    # Read image using OpenCV
+    img = cv2.imread(img_path, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError(f"Failed to read image: {img_path}")
+
+    # JPEG re-encode if image is jpeg or png
+    if img_ext in [".jpg", ".jpeg", ".png"]:
+        # Reduce quality to 90%
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+        success, encoded = cv2.imencode(".jpg", img, encode_param)
+        if not success:
+            raise ValueError(f"JPEG encoding failed for: {img_path}")
+
+        # Decode it back to a numpy array (OpenCV default format)
+        img = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+
+    # Load the label
     label = ""
     label_path = img_path.replace("images", "labels").replace(img_ext, ".txt")
-
-    # read label file if it exists, else raise an error
     if os.path.isfile(label_path):
         with open(label_path) as f:
-            # don't convert to lists, as labels might've different lengths and hence config won't be same for all images
-            label = f.read().strip()  # read the entire file content as a single string
+            label = f.read().strip()
     else:
-        return None
-        raise FileNotFoundError(f"Label file not found: {label_path}")
+        return None  # skip this sample
 
     return {
         "img": img,
@@ -131,7 +139,7 @@ def optimize_ultralytics_dataset(
     for key, value in dataset_config.items():
         if isinstance(value, Path):
             dataset_config[key] = str(value)
-    dataset_config[""]
+
     # save the updated YAML file
     with open("litdata_" + yaml_path, "w") as f:
         yaml.dump(dataset_config, f)
