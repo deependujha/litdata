@@ -202,7 +202,7 @@ ld.map(
 ## Features for optimizing and streaming datasets for model training
 
 <details>
-  <summary> ✅ ge cloud datasets</summary>
+  <summary> ✅ Stream large cloud datasets</summary>
 &nbsp;
 
 Use data stored on the cloud without needing to download it all to your computer, saving time and space.
