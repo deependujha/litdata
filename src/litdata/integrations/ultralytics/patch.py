@@ -426,7 +426,7 @@ def ultralytics_detection_transform(data: Dict[str, Any], **kwargs: Any) -> Dict
     return data
 
 
-def parse_labels(labels: str, **kwargs: Any) -> Tuple[np.ndarray, Union[np.ndarray, List[Any]], Optional[Any]]:
+def parse_labels(labels: str, **kwargs: Any) -> Tuple[Any, Any, Any]:
     from ultralytics.utils.ops import segments2boxes
 
     keypoint = kwargs.get("keypoint", False)
