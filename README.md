@@ -202,7 +202,7 @@ ld.map(
 ## Features for optimizing and streaming datasets for model training
 
 <details>
-  <summary> ✅ Stream large cloud datasets</summary>
+  <summary> ✅ ge cloud datasets</summary>
 &nbsp;
 
 Use data stored on the cloud without needing to download it all to your computer, saving time and space.
@@ -1514,10 +1514,8 @@ if __name__ == "__main__":
 
 </details>
 
-&nbsp;
-
 <details>
-  <summary>🚀 Stream Large Datasets to Ultralytics Models with LitData</summary>
+  <summary>✅ Stream Large Datasets to Ultralytics Models with LitData</summary>
 
  
 
@@ -1561,6 +1559,12 @@ patch_ultralytics()
 #### **Step 3: Train Like Usual — But Now From the Cloud ☁️**
 
 ```python
+from litdata.integrations.ultralytics import patch_ultralytics
+
+patch_ultralytics()
+
+# -------
+
 from ultralytics import YOLO
 
 patch_ultralytics()
@@ -1585,6 +1589,11 @@ That’s it — Ultralytics now streams your data via LitData under the hood!
 
 ### 📊 Benchmarks (Lightning Studio L4 GPU)
 
+- On local machine:
+<img width="580" height="234" alt="Screenshot 2025-07-09 at 10 14 27 AM" src="https://github.com/user-attachments/assets/8c735a48-c0d9-4c1d-8a03-7de58147d889" />
+
+- On lightning studio (L4 GPU machine)
+<img width="478" height="183" alt="Screenshot 2025-07-11 at 12 50 11 AM" src="https://github.com/user-attachments/assets/98bfa8cc-5cea-4dd2-8957-f2ad5600246c" />
 
 While the performance gains aren't drastic (due to Ultralytics caching internally), this integration **unlocks all the benefits of streaming** and enables training on large-scale datasets from the cloud.
 
