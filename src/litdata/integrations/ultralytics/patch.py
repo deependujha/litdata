@@ -435,7 +435,8 @@ def parse_labels(labels: str, **kwargs: Any) -> Tuple[Any, Any, Any]:
     nkpt, ndim = data.get("kpt_shape", (0, 0))
     num_cls: int = len(data["names"])
 
-    segments, keypoints = [], None
+    segments: Any = []
+    keypoints: Any = None
 
     lb = [x.split() for x in labels.split("\n") if len(x)]
     if any(len(x) > 6 for x in lb) and (not keypoint):  # is segment
