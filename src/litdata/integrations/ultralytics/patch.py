@@ -32,7 +32,6 @@ def patch_ultralytics() -> None:
 
     check_det_dataset.__code__ = patch_check_det_dataset.__code__
 
-    # Patch training visualizer (optional, but useful)
     from ultralytics.models.yolo.detect.train import DetectionTrainer
 
     DetectionTrainer.plot_training_samples = patch_detection_plot_training_samples
@@ -43,7 +42,6 @@ def patch_ultralytics() -> None:
     DetectionValidator.plot_val_samples = patch_detection_plot_val_samples
     DetectionValidator.plot_predictions = patch_detection_plot_predictions
 
-    # Patch BaseDataset globally
     import ultralytics.data.base as base_module
     import ultralytics.data.dataset as child_modules
 
