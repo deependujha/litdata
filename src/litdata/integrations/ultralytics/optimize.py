@@ -141,7 +141,8 @@ def optimize_ultralytics_dataset(
             dataset_config[key] = str(value)
 
     # save the updated YAML file
-    with open("litdata_" + yaml_path, "w") as f:
+    output_yaml = Path(yaml_path).with_name("litdata_" + Path(yaml_path).name)
+    with open(output_yaml, "w") as f:
         yaml.dump(dataset_config, f)
 
 
