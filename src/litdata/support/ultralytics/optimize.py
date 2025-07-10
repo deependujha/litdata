@@ -157,5 +157,18 @@ def get_output_dir(output_dir: Dir, mode: str) -> Dir:
     return Dir(url=url, path=path)
 
 
-def list_all_files(path: str) -> list[str]:
-    return [str(p) for p in Path(path).rglob("*") if p.is_file()]
+def list_all_files(_path: str) -> list[str]:
+    path = Path(_path)
+
+    if path.is_dir():
+        # Recursively list all files under the directory
+        return [str(p) for p in path.rglob("*") if p.is_file()]
+
+    if path.is_file() and path.suffix == ".txt":
+        # Read lines and return cleaned-up paths
+        base_dir = path.parent  # use the parent of the txt file to resolve relative paths
+        with open(path) as f:
+            return [str((base_dir / line.strip()).resolve()) for line in f if line.strip()]
+
+    else:
+        raise ValueError(f"Unsupported path: {path}")

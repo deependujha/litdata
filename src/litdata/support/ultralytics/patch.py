@@ -148,7 +148,15 @@ if _ULTRALYTICS_AVAILABLE:
                     self.update_labels_info,
                     self.transforms,
                 ],
-                transform_kwargs={"img_size": self.imgsz, "channels": self.channels},
+                transform_kwargs={
+                    "img_size": self.imgsz,
+                    "channels": self.channels,
+                    "segment": self.use_segments,
+                    "use_keypoints": self.use_keypoints,
+                    "use_obb": self.use_obb,
+                    "lit_args": self.data,
+                    "single_cls": self.single_cls,
+                },
             )
             self.ni = len(self.streaming_dataset)
             self.buffer = list(range(len(self.streaming_dataset)))
@@ -389,8 +397,6 @@ def ultralytics_detection_transform(data: Dict[str, Any], **kwargs: Any) -> Dict
     # split label on the basis of `\n` and then split each line on the basis of ` `
     # first element is class, rest are bbox coordinates
     if isinstance(label, str):
-        label = label.split("\n")
-        label = [line.split(" ") for line in label if line.strip()]
         img, ori_shape, resized_shape = image_resize(
             data["img"], imgsz=kwargs.get("img_size", 640), rect_mode=True, augment=True
         )
@@ -398,15 +404,16 @@ def ultralytics_detection_transform(data: Dict[str, Any], **kwargs: Any) -> Dict
             resized_shape[0] / ori_shape[0],
             resized_shape[1] / ori_shape[1],
         )  # for evaluation
+        lb, segments, keypoint = parse_labels(label, **kwargs)
 
         data = {
             "batch_idx": np.array([index]),  # ← add this!
             "img": img,
-            "cls": np.array([[int(line[0])] for line in label]),
-            "bboxes": np.array([[float(coord) for coord in line[1:]] for line in label]),
+            "cls": lb[:, 0:1],  # n, 1
+            "bboxes": lb[:, 1:],  # n, 4
+            "segments": segments,
+            "keypoints": keypoint,
             "normalized": True,
-            "segments": [],
-            "keypoints": None,
             "bbox_format": "xywh",
             "ori_shape": ori_shape,
             "resized_shape": resized_shape,
@@ -417,3 +424,53 @@ def ultralytics_detection_transform(data: Dict[str, Any], **kwargs: Any) -> Dict
         raise ValueError("Label must be a string in YOLO format.")
 
     return data
+
+
+def parse_labels(labels: str, **kwargs: Any):
+    from ultralytics.utils.ops import segments2boxes
+
+    keypoint = kwargs.get("keypoint", False)
+    single_cls = kwargs.get("single_cls", False)
+    data = kwargs["lit_args"]
+    nkpt, ndim = data.get("kpt_shape", (0, 0))
+    num_cls: int = len(data["names"])
+
+    segments, keypoints = [], None
+
+    lb = [x.split() for x in labels.split("\n") if len(x)]
+    if any(len(x) > 6 for x in lb) and (not keypoint):  # is segment
+        classes = np.array([x[0] for x in lb], dtype=np.float32)
+        segments = [np.array(x[1:], dtype=np.float32).reshape(-1, 2) for x in lb]  # (cls, xy1...)
+        lb = np.concatenate((classes.reshape(-1, 1), segments2boxes(segments)), 1)  # (cls, xywh)
+    lb = np.array(lb, dtype=np.float32)
+    if nl := len(lb):
+        if keypoint:
+            assert lb.shape[1] == (5 + nkpt * ndim), f"labels require {(5 + nkpt * ndim)} columns each"
+            points = lb[:, 5:].reshape(-1, ndim)[:, :2]
+        else:
+            assert lb.shape[1] == 5, f"labels require 5 columns, {lb.shape[1]} columns detected"
+            points = lb[:, 1:]
+        # Coordinate points check with 1% tolerance
+        assert points.max() <= 1.01, f"non-normalized or out of bounds coordinates {points[points > 1.01]}"
+        assert lb.min() >= -0.01, f"negative class labels {lb[lb < -0.01]}"
+
+        # All labels
+        if single_cls:
+            lb[:, 0] = 0
+        max_cls = lb[:, 0].max()  # max label count
+        assert max_cls < num_cls, (
+            f"Label class {int(max_cls)} exceeds dataset class count {num_cls}. "
+            f"Possible class labels are 0-{num_cls - 1}"
+        )
+        _, i = np.unique(lb, axis=0, return_index=True)
+        if len(i) < nl:  # duplicate row check
+            lb = lb[i]  # remove duplicates
+            if segments:
+                segments = [segments[x] for x in i]
+    if keypoint:
+        keypoints = lb[:, 5:].reshape(-1, nkpt, ndim)
+        if ndim == 2:
+            kpt_mask = np.where((keypoints[..., 0] < 0) | (keypoints[..., 1] < 0), 0.0, 1.0).astype(np.float32)
+            keypoints = np.concatenate([keypoints, kpt_mask[..., None]], axis=-1)  # (nl, nkpt, 3)
+    lb = lb[:, :5]
+    return lb, segments, keypoints
