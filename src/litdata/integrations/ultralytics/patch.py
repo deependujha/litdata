@@ -28,12 +28,6 @@ def patch_ultralytics() -> None:
     if not _ULTRALYTICS_AVAILABLE:
         raise ImportError("Ultralytics is not available. Please install it to use this functionality.")
 
-    # import sys
-
-    # if "ultralytics" in sys.modules:
-    #     raise RuntimeError("patch_ultralytics() must be called before importing 'ultralytics'")
-
-    # Patch detection dataset loading
     from ultralytics.data.utils import check_det_dataset
 
     check_det_dataset.__code__ = patch_check_det_dataset.__code__
@@ -67,67 +61,6 @@ def patch_ultralytics() -> None:
     Compose.__call__.__code__ = patch_compose_transform_call.__code__
 
     print("✅ Ultralytics successfully patched to use LitData.")
-
-
-def patch_check_det_dataset(dataset: str, _: bool = True) -> Dict:
-    if not (isinstance(dataset, str) and dataset.endswith(".yaml") and os.path.isfile(dataset)):
-        raise ValueError("Dataset must be a string ending with '.yaml' and point to a valid file.")
-
-    import yaml
-
-    if not dataset.startswith("litdata_"):
-        dataset = "litdata_" + dataset
-
-    if not os.path.isfile(dataset):
-        raise FileNotFoundError(f"Dataset file not found: {dataset}")
-
-    # read the yaml file
-    with open(dataset) as file:
-        return yaml.safe_load(file)
-
-
-def patch_build_dataloader(
-    dataset: Any, batch: int, workers: int, shuffle: bool = True, rank: int = -1, drop_last: bool = False
-) -> StreamingDataLoader:
-    """Create and return an InfiniteDataLoader or DataLoader for training or validation.
-
-    Args:
-        dataset (Dataset): Dataset to load data from.
-        batch (int): Batch size for the dataloader.
-        workers (int): Number of worker threads for loading data.
-        shuffle (bool, optional): Whether to shuffle the dataset.
-        rank (int, optional): Process rank in distributed training. -1 for single-GPU training.
-        drop_last (bool, optional): Whether to drop the last incomplete batch.
-
-    Returns:
-        (StreamingDataLoader): A dataloader that can be used for training or validation.
-
-    Examples:
-        Create a dataloader for training
-        >>> dataset = YOLODataset(...)
-        >>> dataloader = build_dataloader(dataset, batch=16, workers=4, shuffle=True)
-    """
-    from litdata.streaming.dataloader import StreamingDataLoader
-
-    print("litdata is rocking⚡️")
-    if not hasattr(dataset, "streaming_dataset"):
-        raise ValueError("The dataset must have a 'streaming_dataset' attribute.")
-
-    from ultralytics.data.utils import PIN_MEMORY
-
-    batch = min(batch, len(dataset))
-    num_devices = torch.cuda.device_count()  # number of CUDA devices
-    num_workers = min((os.cpu_count() or 1) // max(num_devices, 1), workers)  # number of workers
-    persistent_workers = bool(int(os.getenv("UL_PERSISTENT_WORKERS", 0)))
-    return StreamingDataLoader(
-        dataset=dataset.streaming_dataset,
-        batch_size=batch,
-        num_workers=num_workers,
-        persistent_workers=persistent_workers,
-        pin_memory=PIN_MEMORY,
-        collate_fn=getattr(dataset, "collate_fn", None),
-        drop_last=drop_last,
-    )
 
 
 if _ULTRALYTICS_AVAILABLE:
@@ -321,7 +254,66 @@ if _ULTRALYTICS_AVAILABLE:
             fname=self.save_dir / f"val_batch{ni}_pred.jpg",
             names=self.names,
             on_plot=self.on_plot,
-        )  # pred
+        )
+
+    def patch_check_det_dataset(dataset: str, _: bool = True) -> Dict:
+        if not (isinstance(dataset, str) and dataset.endswith(".yaml") and os.path.isfile(dataset)):
+            raise ValueError("Dataset must be a string ending with '.yaml' and point to a valid file.")
+
+        import yaml
+
+        if not dataset.startswith("litdata_"):
+            dataset = "litdata_" + dataset
+
+        if not os.path.isfile(dataset):
+            raise FileNotFoundError(f"Dataset file not found: {dataset}")
+
+        # read the yaml file
+        with open(dataset) as file:
+            return yaml.safe_load(file)
+
+    def patch_build_dataloader(
+        dataset: Any, batch: int, workers: int, shuffle: bool = True, rank: int = -1, drop_last: bool = False
+    ) -> StreamingDataLoader:
+        """Create and return an InfiniteDataLoader or DataLoader for training or validation.
+
+        Args:
+            dataset (Dataset): Dataset to load data from.
+            batch (int): Batch size for the dataloader.
+            workers (int): Number of worker threads for loading data.
+            shuffle (bool, optional): Whether to shuffle the dataset.
+            rank (int, optional): Process rank in distributed training. -1 for single-GPU training.
+            drop_last (bool, optional): Whether to drop the last incomplete batch.
+
+        Returns:
+            (StreamingDataLoader): A dataloader that can be used for training or validation.
+
+        Examples:
+            Create a dataloader for training
+            >>> dataset = YOLODataset(...)
+            >>> dataloader = build_dataloader(dataset, batch=16, workers=4, shuffle=True)
+        """
+        from litdata.streaming.dataloader import StreamingDataLoader
+
+        print("litdata is rocking⚡️")
+        if not hasattr(dataset, "streaming_dataset"):
+            raise ValueError("The dataset must have a 'streaming_dataset' attribute.")
+
+        from ultralytics.data.utils import PIN_MEMORY
+
+        batch = min(batch, len(dataset))
+        num_devices = torch.cuda.device_count()  # number of CUDA devices
+        num_workers = min((os.cpu_count() or 1) // max(num_devices, 1), workers)  # number of workers
+        persistent_workers = bool(int(os.getenv("UL_PERSISTENT_WORKERS", 0)))
+        return StreamingDataLoader(
+            dataset=dataset.streaming_dataset,
+            batch_size=batch,
+            num_workers=num_workers,
+            persistent_workers=persistent_workers,
+            pin_memory=PIN_MEMORY,
+            collate_fn=getattr(dataset, "collate_fn", None),
+            drop_last=drop_last,
+        )
 
     def patch_detection_plot_training_labels(self: Any) -> None:
         """Create a labeled training plot of the YOLO model."""
@@ -374,6 +366,7 @@ if _ULTRALYTICS_AVAILABLE:
                 continue  # Skip mix transforms, they are applied separately
             data = t(data)
         return data
+
 
 # ------- helper transformations -------
 
