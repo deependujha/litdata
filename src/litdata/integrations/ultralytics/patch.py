@@ -437,7 +437,9 @@ def parse_labels(labels: str, **kwargs: Any) -> Tuple[Any, Any, Any]:
     lb = np.array(lb, dtype=np.float32)
     if nl := len(lb):
         if keypoint:
-            assert lb.shape[1] == (5 + nkpt * ndim), f"labels require {(5 + nkpt * ndim)} columns each"
+            assert lb.shape[1] == (5 + nkpt * ndim), (
+                f"labels require {(5 + nkpt * ndim)} columns each, but {lb.shape[1]} columns detected"
+            )
             points = lb[:, 5:].reshape(-1, ndim)[:, :2]
         else:
             assert lb.shape[1] == 5, f"labels require 5 columns, {lb.shape[1]} columns detected"
