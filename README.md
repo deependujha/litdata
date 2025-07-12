@@ -1514,6 +1514,45 @@ if __name__ == "__main__":
 
 </details>
 
+## Features for transforming datasets
+
+<details>
+  <summary> ✅ Parallelize data transformations (map)</summary>
+&nbsp;
+
+Apply the same change to different parts of the dataset at once to save time and effort.
+
+The `map` operator can be used to apply a function over a list of inputs.
+
+Here is an example where the `map` operator is used to apply a `resize_image` function over a folder of large images.
+
+```python
+from litdata import map
+from PIL import Image
+
+# Note: Inputs could also refer to files on s3 directly.
+input_dir = "my_large_images"
+inputs = [os.path.join(input_dir, f) for f in os.listdir(input_dir)]
+
+# The resize image takes one of the input (image_path) and the output directory.
+# Files written to output_dir are persisted.
+def resize_image(image_path, output_dir):
+  output_image_path = os.path.join(output_dir, os.path.basename(image_path))
+  Image.open(image_path).resize((224, 224)).save(output_image_path)
+
+map(
+    fn=resize_image,
+    inputs=inputs,
+    output_dir="s3://my-bucket/my_resized_images",
+)
+```
+
+</details>
+
+&nbsp;
+
+## Ultralytics (YOLO) Integration
+
 <details>
   <summary>✅ Stream Large Datasets to Ultralytics Models with LitData</summary>
 
@@ -1584,6 +1623,7 @@ That’s it — Ultralytics now streams your data via LitData under the hood!
 * 🧪 **Benchmark-tested** — supports both local and cloud training.
 * 🧩 **Plug-and-play with Ultralytics** — zero training code changes.
 * ☁️ Supports **S3, GCS, HTTP(S), and local disk** out-of-the-box.
+* ✅ **Minimal code changes** to existing Ultralytics training scripts
 
 ---
 
@@ -1597,45 +1637,9 @@ That’s it — Ultralytics now streams your data via LitData under the hood!
 
 While the performance gains aren't drastic (due to Ultralytics caching internally), this integration **unlocks all the benefits of streaming** and enables training on large-scale datasets from the cloud.
 
+Instead of downloading entire datasets (which can be hundreds of GBs), you can now **stream data on-the-fly from S3, GCS, HTTP(S), or even local disk** — making it ideal for training in the cloud with limited storage and more efficient utilization of resources.
+
 We’re also exploring a **custom LitData dataloader** built from scratch (potentially breaking GIL using Rust or multithreading). If it outperforms `torch.DataLoader`, future benchmarks could reflect significant performance boosts. 💡
-
-</details>
-
-&nbsp;
-
-
-## Features for transforming datasets
-
-<details>
-  <summary> ✅ Parallelize data transformations (map)</summary>
-&nbsp;
-
-Apply the same change to different parts of the dataset at once to save time and effort.
-
-The `map` operator can be used to apply a function over a list of inputs.
-
-Here is an example where the `map` operator is used to apply a `resize_image` function over a folder of large images.
-
-```python
-from litdata import map
-from PIL import Image
-
-# Note: Inputs could also refer to files on s3 directly.
-input_dir = "my_large_images"
-inputs = [os.path.join(input_dir, f) for f in os.listdir(input_dir)]
-
-# The resize image takes one of the input (image_path) and the output directory.
-# Files written to output_dir are persisted.
-def resize_image(image_path, output_dir):
-  output_image_path = os.path.join(output_dir, os.path.basename(image_path))
-  Image.open(image_path).resize((224, 224)).save(output_image_path)
-
-map(
-    fn=resize_image,
-    inputs=inputs,
-    output_dir="s3://my-bucket/my_resized_images",
-)
-```
 
 </details>
 
