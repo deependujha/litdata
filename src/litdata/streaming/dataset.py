@@ -451,21 +451,22 @@ class StreamingDataset(IterableDataset):
             )
         )
         if hasattr(self, "transform"):
-            self.transform_kwargs["index"] = index.index
+            local_transform_kwargs = self.transform_kwargs.copy()
+            local_transform_kwargs["index"] = index.index
             if isinstance(self.transform, list):
                 for transform_fn in self.transform:
                     signature = inspect.signature(transform_fn)
                     accepts_kwargs = any(
                         param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
                     )
-                    item = transform_fn(item, **self.transform_kwargs) if accepts_kwargs else transform_fn(item)
+                    item = transform_fn(item, **local_transform_kwargs) if accepts_kwargs else transform_fn(item)
             else:
                 # check if transform function accepts kwargs
                 signature = inspect.signature(self.transform)
                 accepts_kwargs = any(
                     param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
                 )
-                item = self.transform(item, **self.transform_kwargs) if accepts_kwargs else self.transform(item)
+                item = self.transform(item, **local_transform_kwargs) if accepts_kwargs else self.transform(item)
         return item
 
     def __next__(self) -> Any:
