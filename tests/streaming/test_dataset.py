@@ -17,8 +17,9 @@ import os
 import random
 import shutil
 import sys
+from functools import partial
 from time import sleep
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 from unittest import mock
 from unittest.mock import patch
 
@@ -1081,7 +1082,7 @@ def test_dataset_resume_on_future_chunks(shuffle, tmpdir, monkeypatch):
 def test_dataset_valid_state(tmpdir, monkeypatch):
     seed_everything(42)
 
-    index_json_content: Optional[Dict[str, Any]] = None
+    index_json_content: Optional[dict[str, Any]] = None
 
     def mock_resolve_dataset(dir_path: str) -> Dir:
         return Dir(
@@ -1217,7 +1218,7 @@ def test_dataset_valid_state(tmpdir, monkeypatch):
 def test_dataset_valid_state_override(tmpdir, monkeypatch):
     seed_everything(42)
 
-    index_json_content: Optional[Dict[str, Any]] = None
+    index_json_content: Optional[dict[str, Any]] = None
 
     def mock_resolve_dataset(dir_path: str) -> Dir:
         return Dir(
@@ -1713,21 +1714,19 @@ def test_dataset_multiple_transform(tmpdir, shuffle):
     cache.merge()
 
     # Define two simple transform function
-    def transform_fn_1(x, *args, **kwargs):
+    def transform_fn_1(x):
         """A simple transform function that doubles the input."""
         return x * 2
 
-    def transform_fn_2(x, *args, **kwargs):
+    def transform_fn_2(x, extra_num):
         """A simple transform function that adds one to the input."""
-        extra_num = kwargs.get("extra_num", 0)
         return x + extra_num
 
     dataset = StreamingDataset(
         data_dir,
         cache_dir=str(cache_dir),
         shuffle=shuffle,
-        transform=[transform_fn_1, transform_fn_2],
-        transform_kwargs={"extra_num": 100},
+        transform=[transform_fn_1, partial(transform_fn_2, extra_num=100)],
     )
     dataset_length = len(dataset)
     assert dataset_length == 100
