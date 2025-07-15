@@ -197,9 +197,9 @@ class StreamingDataset(IterableDataset):
         self.storage_options = storage_options
         self.session_options = session_options
         self.max_pre_download = max_pre_download
+        self.transform_fn_accepts_index = {}
         if transform is not None:
             transform = transform if isinstance(transform, list) else [transform]
-            self.transform_fn_accepts_index = {}
             for t in transform:
                 if not callable(t):
                     raise ValueError(f"Transform should be a callable. Found {t}")
