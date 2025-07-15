@@ -124,7 +124,9 @@ def test_ultralytics_detection_transform():
 
         # Missing index
         with pytest.raises(ValueError, match="Index must be provided"):
-            ultralytics_detection_transform({"img": dummy_img, "label": valid_label}, channels=3, lit_args=lit_args)
+            ultralytics_detection_transform(
+                {"img": dummy_img, "label": valid_label}, index=None, channels=3, lit_args=lit_args
+            )
 
         # Invalid label type
         with pytest.raises(ValueError, match="Label must be a string"):

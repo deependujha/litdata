@@ -13,7 +13,7 @@
 
 import os
 from pathlib import Path
-from typing import Dict, Optional, Union
+from typing import Optional, Union
 
 import yaml
 
@@ -22,7 +22,7 @@ from litdata.processing.functions import optimize
 from litdata.streaming.resolver import Dir, _resolve_dir
 
 
-def _ultralytics_optimize_fn(img_path: str) -> Optional[Dict]:
+def _ultralytics_optimize_fn(img_path: str) -> Optional[dict]:
     """Optimized function for Ultralytics that reads image + label and optionally re-encodes to reduce size."""
     if not img_path.endswith((".jpg", ".jpeg", ".png")):
         raise ValueError(f"Unsupported image format: {img_path}. Supported formats are .jpg, .jpeg, and .png.")
