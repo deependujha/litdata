@@ -13,7 +13,7 @@
 import math
 import os
 from functools import partial
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import torch
@@ -66,7 +66,7 @@ if _ULTRALYTICS_AVAILABLE:
     from ultralytics.utils.plotting import plot_images
 
     class PatchedUltralyticsBaseDataset(UltralyticsBaseDataset):
-        def __init__(self: Any, img_path: str, classes: Optional[List[int]] = None, *args: Any, **kwargs: Any):
+        def __init__(self: Any, img_path: str, classes: Optional[list[int]] = None, *args: Any, **kwargs: Any):
             print("patched ultralytics dataset: 🔥")
             self.litdata_dataset = img_path
             self.classes = classes
@@ -74,20 +74,18 @@ if _ULTRALYTICS_AVAILABLE:
             self.streaming_dataset = StreamingDataset(
                 img_path,
                 transform=[
-                    ultralytics_detection_transform,
+                    partial(
+                        ultralytics_detection_transform,
+                        img_size=self.imgsz,
+                        channels=self.channels,
+                        keypoint=self.use_keypoints,
+                        single_cls=self.single_cls,
+                        lit_args=self.data,
+                    ),
                     partial(self.transform_update_label, classes),
                     self.update_labels_info,
                     self.transforms,
                 ],
-                transform_kwargs={
-                    "img_size": self.imgsz,
-                    "channels": self.channels,
-                    "segment": self.use_segments,
-                    "use_keypoints": self.use_keypoints,
-                    "use_obb": self.use_obb,
-                    "lit_args": self.data,
-                    "single_cls": self.single_cls,
-                },
             )
             self.ni = len(self.streaming_dataset)
             self.buffer = list(range(len(self.streaming_dataset)))
@@ -101,11 +99,11 @@ if _ULTRALYTICS_AVAILABLE:
             # e.g. use `self.litdata_dataset[index]`
             raise NotImplementedError("Custom logic here")
 
-        def get_img_files(self: Any, img_path: Union[str, List[str]]) -> List[str]:
+        def get_img_files(self: Any, img_path: Union[str, list[str]]) -> list[str]:
             """Let this method return an empty list to avoid errors."""
             return []
 
-        def get_labels(self: Any) -> List[Dict[str, Any]]:
+        def get_labels(self: Any) -> list[dict[str, Any]]:
             # this is used to get number of images (ni) in the BaseDataset class
             return []
 
@@ -130,14 +128,14 @@ if _ULTRALYTICS_AVAILABLE:
             pass
 
         def transform_update_label(
-            self: Any, include_class: Optional[List[int]], label: Dict, *args: Any, **kwargs: Any
-        ) -> Dict:
+            self: Any, include_class: Optional[list[int]], label: dict, *args: Any, **kwargs: Any
+        ) -> dict:
             """Update labels to include only specified classes.
 
             Args:
                 self: PatchedUltralyticsBaseDataset instance.
-                include_class (List[int], optional): List of classes to include. If None, all classes are included.
-                label (Dict): Label to update.
+                include_class (list[int], optional): list of classes to include. If None, all classes are included.
+                label (dict): Label to update.
                 *args: Additional positional arguments (unused).
                 **kwargs: Additional keyword arguments (unused).
             """
@@ -159,7 +157,7 @@ if _ULTRALYTICS_AVAILABLE:
 
             return label
 
-        def __getitem__(self: Any, index: int) -> Dict[str, Any]:
+        def __getitem__(self: Any, index: int) -> dict[str, Any]:
             """Return transformed label information for given index."""
             # return self.transforms(self.get_image_and_label(index))
             if not hasattr(self, "streaming_dataset"):
@@ -192,12 +190,12 @@ if _ULTRALYTICS_AVAILABLE:
             )
             return self.transforms(data)
 
-    def patch_detection_plot_training_samples(self: Any, batch: Dict[str, Any], ni: int) -> None:
+    def patch_detection_plot_training_samples(self: Any, batch: dict[str, Any], ni: int) -> None:
         """Plot training samples with their annotations.
 
         Args:
             self: DetectionTrainer instance.
-            batch (Dict[str, Any]): Dictionary containing batch data.
+            batch (dict[str, Any]): dictionary containing batch data.
             ni (int): Number of iterations.
         """
         plot_images(
@@ -207,12 +205,12 @@ if _ULTRALYTICS_AVAILABLE:
             on_plot=self.on_plot,
         )
 
-    def patch_detection_plot_val_samples(self: Any, batch: Dict[str, Any], ni: int) -> None:
+    def patch_detection_plot_val_samples(self: Any, batch: dict[str, Any], ni: int) -> None:
         """Plot validation image samples.
 
         Args:
             self: DetectionValidator instance.
-            batch (Dict[str, Any]): Batch containing images and annotations.
+            batch (dict[str, Any]): Batch containing images and annotations.
             ni (int): Batch index.
         """
         plot_images(
@@ -224,14 +222,14 @@ if _ULTRALYTICS_AVAILABLE:
         )
 
     def patch_detection_plot_predictions(
-        self: Any, batch: Dict[str, Any], preds: List[Dict[str, torch.Tensor]], ni: int, max_det: Optional[int] = None
+        self: Any, batch: dict[str, Any], preds: list[dict[str, torch.Tensor]], ni: int, max_det: Optional[int] = None
     ) -> None:
         """Plot predicted bounding boxes on input images and save the result.
 
         Args:
             self: DetectionValidator instance.
-            batch (Dict[str, Any]): Batch containing images and annotations.
-            preds (List[Dict[str, torch.Tensor]]): List of predictions from the model.
+            batch (dict[str, Any]): Batch containing images and annotations.
+            preds (list[dict[str, torch.Tensor]]): list of predictions from the model.
             ni (int): Batch index.
             max_det (Optional[int]): Maximum number of detections to plot.
         """
@@ -254,7 +252,7 @@ if _ULTRALYTICS_AVAILABLE:
             on_plot=self.on_plot,
         )
 
-    def patch_check_det_dataset(dataset: str, _: bool = True) -> Dict:
+    def patch_check_det_dataset(dataset: str, _: bool = True) -> dict:
         if not (isinstance(dataset, str) and dataset.endswith(".yaml") and os.path.isfile(dataset)):
             raise ValueError("Dataset must be a string ending with '.yaml' and point to a valid file.")
 
@@ -317,7 +315,7 @@ if _ULTRALYTICS_AVAILABLE:
         """Create a labeled training plot of the YOLO model."""
         pass
 
-    def patch_get_labels(self: Any) -> List[Dict[str, Any]]:
+    def patch_get_labels(self: Any) -> list[dict[str, Any]]:
         # this is used to get number of images (ni) in the BaseDataset class
         return []
 
@@ -327,7 +325,7 @@ if _ULTRALYTICS_AVAILABLE:
 
     def image_resize(
         im: Any, imgsz: int, rect_mode: bool = True, augment: bool = True
-    ) -> Tuple[Any, Tuple[int, int], Tuple[int, int]]:
+    ) -> tuple[Any, tuple[int, int], tuple[int, int]]:
         """Resize the image to a fixed size.
 
         Args:
@@ -337,7 +335,7 @@ if _ULTRALYTICS_AVAILABLE:
             augment (bool): If True, data augmentation is applied.
 
         Returns:
-            Tuple[Any, Tuple[int, int], Tuple[int, int]]: Resized image and its original dimensions.
+            tuple[Any, tuple[int, int], tuple[int, int]]: Resized image and its original dimensions.
         """
         import cv2
 
@@ -369,18 +367,29 @@ if _ULTRALYTICS_AVAILABLE:
 # ------- helper transformations -------
 
 
-def ultralytics_detection_transform(data: Dict[str, Any], **kwargs: Any) -> Dict[str, Any]:
+def ultralytics_detection_transform(
+    data: dict[str, Any],
+    index: int,
+    channels: int = 3,
+    img_size: int = 640,
+    keypoint: bool = False,
+    single_cls: bool = False,
+    lit_args: dict[str, Any] = {},
+) -> dict[str, Any]:
     """Transform function for YOLO detection datasets.
 
     Args:
-        data (Dict[str, Any]): Input data containing image and label.
-        kwargs (Dict[str, Any]): Additional keyword arguments, including the index of the data item.
+        data (dict[str, Any]): Input data containing image and label.
+        index (int): Index of the data item.
+        channels (int): Number of channels in the image.
+        img_size (int): Target size for resizing the image.
+        keypoint (bool): Whether to include keypoints in the label.
+        single_cls (bool): Whether to use single class mode.
+        lit_args (dict[str, Any]): Additional arguments for the transform.
 
     Returns:
-        Dict[str, Any]: Transformed data with image and label.
+        dict[str, Any]: Transformed data with image and label.
     """
-    index = kwargs.get("index")
-    channels = kwargs.get("channels", 3)  # default to 3 channels (RGB)
     if index is None:
         raise ValueError("Index must be provided for YOLO detection transform.")
 
@@ -388,17 +397,15 @@ def ultralytics_detection_transform(data: Dict[str, Any], **kwargs: Any) -> Dict
     # split label on the basis of `\n` and then split each line on the basis of ` `
     # first element is class, rest are bbox coordinates
     if isinstance(label, str):
-        img, ori_shape, resized_shape = image_resize(
-            data["img"], imgsz=kwargs.get("img_size", 640), rect_mode=True, augment=True
-        )
+        img, ori_shape, resized_shape = image_resize(data["img"], imgsz=img_size, rect_mode=True, augment=True)
         ratio_pad = (
             resized_shape[0] / ori_shape[0],
             resized_shape[1] / ori_shape[1],
         )  # for evaluation
-        lb, segments, keypoint = parse_labels(label, **kwargs)
+        lb, segments, keypoint = parse_labels(label, keypoint=keypoint, single_cls=single_cls, lit_args=lit_args)
 
         data = {
-            "batch_idx": np.array([index]),  # ← add this!
+            "batch_idx": np.array([index]),
             "img": img,
             "cls": lb[:, 0:1],  # n, 1
             "bboxes": lb[:, 1:],  # n, 4
@@ -417,14 +424,13 @@ def ultralytics_detection_transform(data: Dict[str, Any], **kwargs: Any) -> Dict
     return data
 
 
-def parse_labels(labels: str, **kwargs: Any) -> Tuple[Any, Any, Any]:
+def parse_labels(
+    labels: str, keypoint: bool = False, single_cls: bool = False, lit_args: dict[str, Any] = {}
+) -> tuple[Any, Any, Any]:
     from ultralytics.utils.ops import segments2boxes
 
-    keypoint = kwargs.get("keypoint", False)
-    single_cls = kwargs.get("single_cls", False)
-    data = kwargs["lit_args"]
-    nkpt, ndim = data.get("kpt_shape", (0, 0))
-    num_cls: int = len(data["names"])
+    nkpt, ndim = lit_args.get("kpt_shape", (0, 0))
+    num_cls: int = len(lit_args["names"])
 
     segments: Any = []
     keypoints: Any = None
