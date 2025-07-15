@@ -745,7 +745,7 @@ def _replay_chunks_sampling(
     return chunks_index, indexes
 
 
-def has_argument_named_index(func) -> bool:
+def has_argument_named_index(func: Callable) -> bool:
     """Returns True if the function has an argument named 'index'."""
     sig = inspect.signature(func)
     return "index" in sig.parameters
