@@ -90,15 +90,18 @@ def test_ultralytics_detection_transform():
 
     lit_args = {"names": ["class0", "class1"], "kpt_shape": (0, 0)}
 
-    with patch(
-        "litdata.integrations.ultralytics.patch.image_resize",
-        return_value=(dummy_img_resized, ori_shape, resized_shape),
-    ), patch(
-        "litdata.integrations.ultralytics.patch.parse_labels",
-        return_value=(
-            np.array([[1, 0.1, 0.2, 0.3, 0.4], [0, 0.5, 0.6, 0.7, 0.8]], dtype=np.float32),
-            [],
-            None,
+    with (
+        patch(
+            "litdata.integrations.ultralytics.patch.image_resize",
+            return_value=(dummy_img_resized, ori_shape, resized_shape),
+        ),
+        patch(
+            "litdata.integrations.ultralytics.patch.parse_labels",
+            return_value=(
+                np.array([[1, 0.1, 0.2, 0.3, 0.4], [0, 0.5, 0.6, 0.7, 0.8]], dtype=np.float32),
+                [],
+                None,
+            ),
         ),
     ):
         # ✅ Valid transformation
