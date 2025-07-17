@@ -12,6 +12,7 @@
 # limitations under the License.
 
 import os
+from functools import partial
 from pathlib import Path
 from typing import Optional, Union
 
@@ -22,7 +23,7 @@ from litdata.processing.functions import optimize
 from litdata.streaming.resolver import Dir, _resolve_dir
 
 
-def _ultralytics_optimize_fn(img_path: str) -> Optional[dict]:
+def _ultralytics_optimize_fn(img_path: str, img_quality: int) -> Optional[dict]:
     """Optimized function for Ultralytics that reads image + label and optionally re-encodes to reduce size."""
     if not img_path.endswith((".jpg", ".jpeg", ".png")):
         raise ValueError(f"Unsupported image format: {img_path}. Supported formats are .jpg, .jpeg, and .png.")
@@ -38,8 +39,8 @@ def _ultralytics_optimize_fn(img_path: str) -> Optional[dict]:
 
     # JPEG re-encode if image is jpeg or png
     if img_ext in [".jpg", ".jpeg", ".png"]:
-        # Reduce quality to 90%
-        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
+        # Reduce quality to specified value of img_quality
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), img_quality]
         success, encoded = cv2.imencode(".jpg", img, encode_param)
         if not success:
             raise ValueError(f"JPEG encoding failed for: {img_path}")
@@ -68,6 +69,7 @@ def optimize_ultralytics_dataset(
     chunk_size: Optional[int] = None,
     chunk_bytes: Optional[Union[int, str]] = None,
     num_workers: int = 1,
+    img_quality: int = 90,
     verbose: bool = False,
 ) -> None:
     """Optimize an Ultralytics dataset by converting it into chunks and resizing images.
@@ -78,6 +80,7 @@ def optimize_ultralytics_dataset(
         chunk_size: Number of samples per chunk. If None, no chunking is applied.
         chunk_bytes: Maximum size of each chunk in bytes. If None, no size limit is applied.
         num_workers: Number of worker processes to use for optimization. Defaults to 1.
+        img_quality: Quality of the JPEG images after optimization (0-100). Defaults to 90.
         verbose: Whether to print progress messages. Defaults to False.
     """
     if not _ULTRALYTICS_AVAILABLE:
@@ -115,7 +118,7 @@ def optimize_ultralytics_dataset(
         inputs = list_all_files(dataset_config[mode])
 
         optimize(
-            fn=_ultralytics_optimize_fn,
+            fn=partial(_ultralytics_optimize_fn, img_quality=img_quality),
             inputs=inputs,
             output_dir=mode_output_dir.url or mode_output_dir.path or "optimized_data",
             chunk_bytes=chunk_bytes,
