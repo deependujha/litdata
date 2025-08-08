@@ -47,8 +47,6 @@ jobs:
 
       - name: Run fast tests in parallel
         run: |
-          CORES=$(python -c "import os; print(max(0, os.cpu_count()))")
-          echo "Using $CORES cores for pytest"
           pytest tests \
             --ignore=tests/processing \
             --ignore=tests/raw \
