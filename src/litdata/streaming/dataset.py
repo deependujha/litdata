@@ -93,7 +93,7 @@ class StreamingDataset(IterableDataset):
         """
         _check_version_and_prompt_upgrade(__version__)
 
-        if not isinstance(input_dir, list):
+        if not isinstance(input_dir, (list, tuple)):
             input_dir = [input_dir]
 
         super().__init__()
@@ -109,15 +109,21 @@ class StreamingDataset(IterableDataset):
 
         if len(input_dir) > 1:
             raise ValueError("Not implemented")
-        input_dir = input_dir[0]
 
         input_dir = _resolve_dir(input_dir)
+        input_dir = [input_dir] if not isinstance(input_dir, list) else input_dir
         cache_dir = _resolve_dir(cache_dir)
 
-        if input_dir.url is not None and input_dir.url.startswith("hf://"):
+        if any(_dir.url is not None and _dir.url.startswith("hf://") for _dir in input_dir) and len(input_dir) > 1:
+            raise ValueError(
+                "Streaming multiple Hugging Face datasets is not supported."
+                "Please provide a single `hf://` dataset URL. If you need this feature, please open an issue on GitHub."
+            )
+
+        if len(input_dir) == 1 and input_dir[0].url is not None and input_dir[0].url.startswith("hf://"):
             if index_path is None:
                 # No index_path was provided. Attempt to load it from cache or generate it dynamically on the fly.
-                index_path = index_hf_dataset(input_dir.url, cache_dir.path)
+                index_path = index_hf_dataset(input_dir[0].url, cache_dir.path)
             if item_loader is not None and not isinstance(item_loader, ParquetLoader):
                 raise ValueError(
                     "Invalid item_loader for hf://datasets. "
@@ -129,8 +135,8 @@ class StreamingDataset(IterableDataset):
 
         self.input_dir = input_dir
         self.cache_dir = cache_dir
-        self.subsampled_files: list[str] = []
-        self.region_of_interest: list[tuple[int, int]] = []
+        self.subsampled_files: list[list[str]] = []
+        self.region_of_interest: list[list[tuple[int, int]]] = []
         self.subsampled_files, self.region_of_interest = subsample_streaming_dataset(
             self.input_dir,
             self.cache_dir,
@@ -242,13 +248,14 @@ class StreamingDataset(IterableDataset):
             self.current_epoch = current_epoch
 
     def _create_cache(self, worker_env: _WorkerEnv) -> Cache:
-        if _should_replace_path(self.input_dir.path):
+        if all(_should_replace_path(_dir.path) for _dir in self.input_dir):
             cache_path = _try_create_cache_dir(
                 input_dir=self.input_dir.path if self.input_dir.path else self.input_dir.url,
                 cache_dir=self.cache_dir.path,
             )
             if cache_path is not None:
-                self.input_dir.path = cache_path
+                for _dir in self.input_dir:
+                    _dir.path = cache_path
 
         cache = Cache(
             input_dir=self.input_dir,
