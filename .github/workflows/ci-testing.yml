@@ -52,7 +52,7 @@ jobs:
           pytest tests \
             --ignore=tests/processing \
             --ignore=tests/raw \
-            -n $CORES --cov=litdata --durations=120
+            -n 3 --cov=litdata --durations=120
 
       - name: Run processing tests sequentially
         run: |
