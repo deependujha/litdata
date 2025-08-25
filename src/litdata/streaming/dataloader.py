@@ -835,3 +835,14 @@ class StreamingDataLoader(DataLoader):
             return _SingleProcessDataLoaderIter(self)
         self.check_worker_number_rationality()
         return _StreamingMultiProcessingDataLoaderIter(self)
+
+
+class LightningDataloader:
+    # get the order of chunk indices and item indices in which they will be iterated in SD
+    # start an async downloader for downloading and uncompressing chunk files
+    # start multiple worker processes whose job be will to read relevant bytes and deserialize, unflatten
+    # and then store in a dict to be read later and clear after read
+    def __init__(self, ds: StreamingDataset, batch_size: int = 1, shuffle: bool = False):
+        self.ds = ds
+        self.batch_size = batch_size
+        self.shuffle = shuffle
