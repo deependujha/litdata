@@ -850,6 +850,7 @@ class LightningDataloader:
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.num_workers = num_workers
+
         # Queues
         self.download_queue = asyncio.Queue()  # chunk indices to download
         self.read_queue = mp.Queue()  # (chunk_index, item_index)
