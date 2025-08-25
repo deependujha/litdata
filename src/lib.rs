@@ -1,5 +1,7 @@
 use pyo3::prelude::*;
 
+pub mod litdata_core;
+
 #[pyfunction]
 fn hello_from_bin() -> String {
     "RUST: Hello from LitData!".to_string()
