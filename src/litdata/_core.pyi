@@ -37,3 +37,23 @@ class StreamingDataProvider:
 class S3Storage:
     def __init__(self, remote_dir: str) -> None: ...
     def byte_range_download(self, remote_path: str, local_path: str, num_workers: int) -> None: ...
+
+class LitDataLoaderCore:
+    index: int
+    worker_chunks: list[int]
+    worker_intervals: list[tuple[int, int]]
+    batch_size: int
+    pre_download: int
+    prefetch_workers: int
+    prefetch_factor: int
+
+    def __init__(
+        self,
+        worker_chunks: list[int],
+        worker_intervals: list[tuple[int, int]],
+        batch_size: int,
+        pre_download: int,
+        prefetch_workers: int,
+        prefetch_factor: int,
+    ) -> None: ...
+    def __iter__(self) -> any: ...

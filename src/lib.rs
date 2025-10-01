@@ -1,5 +1,6 @@
-use pyo3::prelude::*;
+// pip install --upgrade pyOpenSSL cryptography
 
+use pyo3::prelude::*;
 pub mod litdata_core;
 
 #[pyfunction]
@@ -13,6 +14,7 @@ fn hello_from_bin() -> String {
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(hello_from_bin, m)?)?;
+    m.add_class::<litdata_core::LitDataLoaderCore>()?;
     // m.add_class::<rust_impl::fs::s3::S3Storage>()?;
     // m.add_class::<rust_impl::streaming_data_provider::StreamingDataProvider>()?;
     Ok(())
