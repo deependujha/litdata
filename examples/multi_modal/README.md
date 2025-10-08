@@ -94,7 +94,7 @@ To use this code, follow these steps:
    python examples/multi_modal/convert.py
    ```
 
-2. **Train Model:**
+1. **Train Model:**
 
    ```python
    python examples/multi_modal/train.py
