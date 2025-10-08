@@ -72,7 +72,7 @@ repos:
         args: ["--number"]
         exclude: |
           (?x)^(
-              src/litdata/CHANGELOG.md|
+              src/litdata/CHANGELOG.md |
               README.md
           )$
 
