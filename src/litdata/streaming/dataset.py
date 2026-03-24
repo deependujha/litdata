@@ -13,8 +13,8 @@
 
 import logging
 import os
-from inspect import signature
 from collections.abc import Callable
+from inspect import signature
 from time import time
 from typing import Any
 

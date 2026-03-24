@@ -621,6 +621,8 @@ def test_dataloader_dataset_transform_invalid_config(tmpdir, caplog):
     # Verify that the multisample transform is applied correctly
     for i, item in enumerate(complete_data):
         assert item == i, f"Expected {i}, got {item}"
+
+
 def getter(index: int):
     return index
 
