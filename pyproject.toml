@@ -13,13 +13,10 @@
 # limitations under the License.
 
 [build-system]
-requires = [
-  "setuptools",
-  "wheel",
-]
+requires = [ "setuptools", "wheel" ]
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 120
 # Exclude a variety of commonly ignored directories.
 exclude = [
@@ -66,22 +63,20 @@ lint.per-file-ignores."examples/**" = [
 ]
 lint.per-file-ignores."setup.py" = [ "D100", "SIM115" ]
 lint.per-file-ignores."src/**" = [
-  "D100",  # Missing docstring in public module
-  "D101",  # todo: Missing docstring in public class
-  "D102",  # todo: Missing docstring in public method
-  "D103",  # todo: Missing docstring in public function
-  "D104",  # Missing docstring in public package
-  "D105",  # todo: Missing docstring in magic method
-  "D107",  # todo: Missing docstring in __init__
-  "D205",  # todo: 1 blank line required between summary line and description
+  "D100", # Missing docstring in public module
+  "D101", # todo: Missing docstring in public class
+  "D102", # todo: Missing docstring in public method
+  "D103", # todo: Missing docstring in public function
+  "D104", # Missing docstring in public package
+  "D105", # todo: Missing docstring in magic method
+  "D107", # todo: Missing docstring in __init__
+  "D205", # todo: 1 blank line required between summary line and description
   "D401",
-  "D404",  # todo: First line should be in imperative mood; try rephrasing
-  "S310",  # todo: Audit URL open for permitted schemes. Allowing use of `file:` or custom schemes is often unexpected.
-  "S602",  # todo: `subprocess` call with `shell=True` identified, security issue
-  "S605",  # todo: Starting a process with a shell: seems safe, but may be changed in the future; consider rewriting without `shell`
-  "S607",  # todo: Starting a process with a partial executable path
-  "UP006", # UP006 Use `list` instead of `List` for type annotation
-  "UP035", # UP035 `typing.Tuple` is deprecated, use `tuple` instead
+  "D404", # todo: First line should be in imperative mood; try rephrasing
+  "S310", # todo: Audit URL open for permitted schemes. Allowing use of `file:` or custom schemes is often unexpected.
+  "S602", # todo: `subprocess` call with `shell=True` identified, security issue
+  "S605", # todo: Starting a process with a shell: seems safe, but may be changed in the future; consider rewriting without `shell`
+  "S607", # todo: Starting a process with a partial executable path
 ]
 lint.per-file-ignores."tests/**" = [
   "D100",
@@ -119,16 +114,8 @@ wrap-descriptions = 120
 blank = true
 
 [tool.pytest.ini_options]
-testpaths = [
-  "tests",
-]
-norecursedirs = [
-  ".git",
-  ".github",
-  "dist",
-  "build",
-  "docs",
-]
+testpaths = [ "tests" ]
+norecursedirs = [ ".git", ".github", "dist", "build", "docs" ]
 addopts = [
   "--strict-markers",
   "--doctest-modules",
@@ -136,12 +123,8 @@ addopts = [
   "--disable-pytest-warnings",
   "--ignore=legacy/checkpoints",
 ]
-markers = [
-  "cloud: Run the cloud tests for example",
-]
-filterwarnings = [
-  "error::FutureWarning",
-]
+markers = [ "cloud: Run the cloud tests for example" ]
+filterwarnings = [ "error::FutureWarning" ]
 xfail_strict = true
 junit_duration_report = "call"
 
@@ -155,9 +138,7 @@ exclude_lines = [
 ]
 
 [tool.mypy]
-files = [
-  "src",
-]
+files = [ "src" ]
 # This section is for folders with "-" as they are not valid python modules
 exclude = [
   "src/litdata/utilities/_pytree.py",
@@ -190,6 +171,5 @@ warn_no_return = "False"
 [[tool.mypy.overrides]]
 # the list can be generated with:
 # mypy --no-error-summary 2>&1 | tr ':' ' ' | awk '{print $1}' | sort | uniq | sed 's/\.py//g; s|src/||g;  s|\/|\.|g' | xargs -I {} echo '"{}",'
-module = [
-]
+module = [  ]
 ignore_errors = "True"

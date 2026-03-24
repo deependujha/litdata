@@ -4,7 +4,6 @@ import os
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
-from pkg_resources import parse_requirements
 from setuptools import find_packages, setup
 
 _PATH_ROOT = os.path.dirname(__file__)
@@ -19,8 +18,12 @@ def _load_py_module(fname, pkg="litdata"):
     return py
 
 
+about = _load_py_module("__about__.py")
+requirements_module = _load_py_module("requirements.py")
+
+
 def _load_requirements(path_dir: str = _PATH_ROOT, file_name: str = "requirements.txt") -> list:
-    reqs = parse_requirements(open(os.path.join(path_dir, file_name)).readlines())
+    reqs = requirements_module._parse_requirements(open(os.path.join(path_dir, file_name)).readlines())
     return list(map(str, reqs))
 
 
@@ -71,7 +74,7 @@ setup(
     include_package_data=True,
     zip_safe=False,
     keywords=["deep learning", "pytorch", "AI", "streaming", "cloud", "data processing"],
-    python_requires=">=3.9",
+    python_requires=">=3.10",
     setup_requires=["wheel"],
     install_requires=_load_requirements(),
     extras_require=_prepare_extras(),
@@ -95,7 +98,6 @@ setup(
         # Specify the Python versions you support here. In particular, ensure
         # that you indicate whether you support Python 2, Python 3 or both.
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",

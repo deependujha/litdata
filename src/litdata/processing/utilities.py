@@ -16,9 +16,10 @@ import json
 import os
 import tempfile
 import urllib
+from collections.abc import Callable
 from contextlib import contextmanager
 from subprocess import DEVNULL, Popen
-from typing import Any, Callable, Optional, Union
+from typing import Any
 from urllib import parse
 
 from litdata.constants import _INDEX_FILENAME, _IS_IN_STUDIO, _SUPPORTED_PROVIDERS
@@ -28,18 +29,18 @@ from litdata.streaming.fs_provider import _get_fs_provider, not_supported_provid
 
 #! TODO: Not sure what this function is used for.
 def _create_dataset(
-    input_dir: Optional[str],
+    input_dir: str | None,
     storage_dir: str,
     dataset_type: Any,
-    empty: Optional[bool] = None,
-    size: Optional[int] = None,
-    num_bytes: Optional[str] = None,
-    data_format: Optional[Union[str, tuple[str]]] = None,
-    compression: Optional[str] = None,
-    num_chunks: Optional[int] = None,
-    num_bytes_per_chunk: Optional[list[int]] = None,
-    name: Optional[str] = None,
-    version: Optional[int] = None,
+    empty: bool | None = None,
+    size: str | None = None,
+    num_bytes: str | None = None,
+    data_format: str | tuple[str] | None = None,
+    compression: str | None = None,
+    num_chunks: str | None = None,
+    num_bytes_per_chunk: list[str] | None = None,
+    name: str | None = None,
+    version: str | None = None,
 ) -> None:
     """Create a dataset with metadata information about its source and destination using the Lightning SDK.
 
@@ -60,28 +61,32 @@ def _create_dataset(
     if not storage_dir:
         raise ValueError("The storage_dir should be defined.")
 
-    from lightning_sdk.lightning_cloud.openapi import ProjectIdDatasetsBody
+    from lightning_sdk.lightning_cloud.openapi.models import DatasetServiceCreateDatasetBody
     from lightning_sdk.lightning_cloud.openapi.rest import ApiException
     from lightning_sdk.lightning_cloud.rest_client import LightningClient
 
     client = LightningClient(retry=False)
 
     try:
+        # Some strings represent protobuf strings, some protouf uint64s
+        # The uint64s need a default of None so they're not added to the
+        # request body, which avoids a 400 response due to an invalid request.
+        # The protobuf string types can default to "" just fine.
         client.dataset_service_create_dataset(
-            body=ProjectIdDatasetsBody(
-                cloud_space_id=studio_id if lightning_app_id is None else None,
-                cluster_id=cluster_id,
-                creator_id=user_id,
-                empty=empty,
-                input_dir=input_dir,
-                lightning_app_id=lightning_app_id,
-                name=name,
+            body=DatasetServiceCreateDatasetBody(
+                cloud_space_id=(studio_id if lightning_app_id is None else None) or "",
+                cluster_id=cluster_id or "",
+                creator_id=user_id or "",
+                empty=empty or True,
+                input_dir=input_dir or "",
+                lightning_app_id=lightning_app_id or "",
+                name=name or "",
                 size=size,
                 num_bytes=num_bytes,
-                data_format=str(data_format) if data_format else data_format,
-                compression=compression,
+                data_format=(str(data_format) if data_format else data_format) or "",
+                compression=compression or "",
                 num_chunks=num_chunks,
-                num_bytes_per_chunk=num_bytes_per_chunk,
+                num_bytes_per_chunk=num_bytes_per_chunk or [],
                 storage_dir=storage_dir,
                 type=dataset_type,
                 version=version,
@@ -95,13 +100,13 @@ def _create_dataset(
             raise ex
 
 
-def get_worker_rank() -> Optional[str]:
+def get_worker_rank() -> str | None:
     return os.getenv("DATA_OPTIMIZER_GLOBAL_RANK")
 
 
 #! TODO: Do we still need this? It is not used anywhere.
 def catch(func: Callable) -> Callable:
-    def _wrapper(*args: Any, **kwargs: Any) -> tuple[Any, Optional[Exception]]:
+    def _wrapper(*args: Any, **kwargs: Any) -> tuple[Any, Exception | None]:
         try:
             return func(*args, **kwargs), None
         except Exception as e:
@@ -200,7 +205,7 @@ def _get_work_dir() -> str:
     return f"s3://{bucket_name}/projects/{project_id}/lightningapps/{app_id}/artifacts/{work_id}/content/"
 
 
-def read_index_file_content(output_dir: Dir, storage_options: dict[str, Any] = {}) -> Optional[dict[str, Any]]:
+def read_index_file_content(output_dir: Dir, storage_options: dict[str, Any] = {}) -> dict[str, Any] | None:
     """Read the index file content."""
     if not isinstance(output_dir, Dir):
         raise ValueError("The provided output_dir should be a Dir object.")
