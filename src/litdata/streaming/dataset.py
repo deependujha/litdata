@@ -71,7 +71,6 @@ class StreamingDataset(IterableDataset):
         force_override_state_dict: bool = False,
         transform: Callable | list[Callable] | None = None,
         sample_count: int = 1,
-        transform: Callable | list[Callable] | None = None,
     ) -> None:
         """The streaming dataset can be used once your data have been optimised using the DatasetOptimiser class.
 
@@ -501,6 +500,7 @@ class StreamingDataset(IterableDataset):
 
     def __getitem__(self, index: ChunkedIndex | int | slice) -> Any:
         # Deflate index for multisample case
+        sample_idx = None
         if self.sample_count > 1:
             if isinstance(index, int):
                 sample_idx = index % self.sample_count
@@ -510,8 +510,6 @@ class StreamingDataset(IterableDataset):
                 index.index = index.index // self.sample_count
             else:
                 raise ValueError("Slices are not supported when using `sample_count > 1`.")
-
-    def __getitem__(self, index: ChunkedIndex | int | slice) -> Any:
         if self.cache is None:
             self.worker_env = _WorkerEnv.detect()
             self.cache = self._create_cache(worker_env=self.worker_env)
