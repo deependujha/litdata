@@ -221,18 +221,18 @@ class StreamingDataset(IterableDataset):
             self.transform = transform
 
         # define invalid transform conditions for multisample case
-        invalid_transform = self.sample_count > 1 and (
-            not hasattr(self, "transform")
-            or len(self.transform) > 1
-            or "sample_idx" not in signature(self.transform[0]).parameters
-        )
-        if invalid_transform:
-            logger.warning(
-                "Invalid transform configuration detected. "
-                "Either no transform, multiple transforms, or missing `sample_idx` parameter. "
-                "Reverting `sample_count` to 1 and returning data as-is."
-            )
-            self.sample_count = 1
+        if self.sample_count > 1:
+            if not hasattr(self, "transform"):
+                raise ValueError("Transform is required when using sample_count > 1.")
+
+            if isinstance(self.transform, list) and len(self.transform) > 1:
+                raise ValueError("Only a single transform is allowed when using sample_count > 1.")
+
+            if isinstance(self.transform, list) and "sample_idx" not in signature(self.transform[0]).parameters:
+                raise ValueError(
+                    "The transform function must accept 'sample_idx' as a parameter when using sample_count > 1."
+                )
+
         self._on_demand_bytes = True  # true by default, when iterating, turn this off to store the chunks in the cache
 
     @property

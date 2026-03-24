@@ -1,4 +1,3 @@
-import logging
 import os
 import sys
 
@@ -578,17 +577,13 @@ def test_dataloader_dataset_transform_invalid_config(tmpdir, caplog):
     cache.done()
     cache.merge()
 
-    # Verify that logger warning happens when transform is not given
-    with caplog.at_level(logging.WARNING):
-        dataset = StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=False, sample_count=4)
+    # Verify that a ValueError is raised when no transform is provided
+    with pytest.raises(ValueError, match="Transform is required when using sample_count > 1."):
+        StreamingDataset(data_dir, cache_dir=str(cache_dir), shuffle=False, sample_count=4)
 
-    assert "Invalid transform configuration detected." in caplog.text
-    dataset_length = len(dataset)
-    assert dataset_length == 100
-
-    # Verify that logger warning happens when multiple transforms are given
-    with caplog.at_level(logging.WARNING):
-        dataset = StreamingDataset(
+    # Verify that a ValueError is raised when multiple transforms are provided
+    with pytest.raises(ValueError, match="Only a single transform is allowed when using sample_count > 1."):
+        StreamingDataset(
             data_dir,
             cache_dir=str(cache_dir),
             shuffle=False,
@@ -596,31 +591,13 @@ def test_dataloader_dataset_transform_invalid_config(tmpdir, caplog):
             transform=[transform_fn_sq, transform_fn_add],
         )
 
-    assert "Invalid transform configuration detected." in caplog.text
-    dataset_length = len(dataset)
-    assert dataset_length == 100
-
-    # Verify that logger warning happens when sample_idx parameter is missing
-    with caplog.at_level(logging.WARNING):
-        dataset = StreamingDataset(
+    # Verify that a ValueError is raised when sample_idx parameter is missing
+    with pytest.raises(
+        ValueError, match="The transform function must accept 'sample_idx' as a parameter when using sample_count > 1."
+    ):
+        StreamingDataset(
             data_dir, cache_dir=str(cache_dir), shuffle=False, sample_count=4, transform=transform_fn_no_sample_idx
         )
-
-    assert "Invalid transform configuration detected." in caplog.text
-    dataset_length = len(dataset)
-    assert dataset_length == 100
-
-    # ACT
-    dl = StreamingDataLoader(dataset, batch_size=10, num_workers=1, shuffle=False)
-
-    complete_data = []
-    for batch in dl:
-        complete_data.extend(batch)
-
-    # ASSERT
-    # Verify that the multisample transform is applied correctly
-    for i, item in enumerate(complete_data):
-        assert item == i, f"Expected {i}, got {item}"
 
 
 def getter(index: int):
