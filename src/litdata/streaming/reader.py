@@ -397,6 +397,14 @@ class BinaryReader:
             self._config.increment_local_lock(chunk_index)
             self._held_shared.add(chunk_index)
 
+    def enable_mmap_for_chunks(self, chunk_indexes: set[int]) -> None:
+        """Tell the item loader which chunks are safe to memory-map (non-shared ones).
+
+        Shared chunks are deliberately excluded: a co-worker could delete/replace a shared chunk
+        while it is mapped, which crashes with SIGSEGV rather than a recoverable error.
+        """
+        self._item_loader.set_mmap_allowed_chunks(chunk_indexes)
+
     def _release_shared_locks(self) -> None:
         """Release any eagerly-acquired shared-chunk locks this worker still holds."""
         if not self._held_shared:
@@ -514,7 +522,10 @@ class BinaryReader:
             # 2. Log the "Begin" event for the NEW chunk.
             logger.debug(_get_log_msg({"name": f"read_chunk_{index.chunk_index}_size_{index.chunk_size}", "ph": "B"}))
 
-            # Close the memory-mapped file for the last chunk index
+            # Close the memory-mapped file for the last chunk index.
+            # PyTreeLoader is intentionally excluded: it keeps only one open chunk and already
+            # unmaps the previous one inside `load_item_from_chunk` before this point. Calling
+            # `close` here would unmap the newly opened chunk (its `close` ignores chunk_index).
             if isinstance(self._item_loader, (TokensLoader, ParquetLoader)) and self._last_chunk_index is not None:
                 self._item_loader.close(self._last_chunk_index)
 
