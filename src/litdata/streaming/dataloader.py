@@ -41,6 +41,7 @@ from litdata.streaming.combined import CombinedStreamingDataset
 from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.parallel import ParallelStreamingDataset
 from litdata.streaming.sampler import CacheBatchSampler
+from litdata.streaming.timing import StreamingTimingStats
 from litdata.utilities._pytree import tree_flatten
 from litdata.utilities.base import (
     __NUM_CYCLES_KEY__,
@@ -674,12 +675,13 @@ class StreamingDataLoader(DataLoader):
         self._worker_idx_iter: Any | None = None
         self._latest_worker_idx = 0
         self.restore = False
+        self._prefetch_factor = (2 if num_workers > 0 else None) if prefetch_factor is None else prefetch_factor
         super().__init__(
             dataset,
             *args,
             batch_size=batch_size,
             num_workers=num_workers,
-            prefetch_factor=(2 if num_workers > 0 else None) if prefetch_factor is None else prefetch_factor,
+            prefetch_factor=self._prefetch_factor,
             collate_fn=collate_fn,
             **kwargs,
         )  # type: ignore
@@ -717,9 +719,12 @@ class StreamingDataLoader(DataLoader):
 
         if isinstance(self.dataset, StreamingDataset):
             assert self.batch_size
+            timing = StreamingTimingStats.instance()
             for batch in super().__iter__():
+                t0 = timing.start()
                 self._latest_worker_idx = next(self._worker_idx_iter)  # type: ignore
                 self._num_samples_yielded_streaming += self.batch_size
+                timing.record("dataloader_yield_s", t0)
                 yield batch
         else:
             self.dataset._set_use_streaming_dataloader(True)

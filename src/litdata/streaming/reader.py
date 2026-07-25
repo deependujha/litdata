@@ -15,21 +15,30 @@ import glob
 import logging
 import os
 import warnings
+from collections import deque
 from contextlib import suppress
 from datetime import datetime
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
+from time import sleep, time
 from typing import Any
 
 import numpy as np
 from filelock import FileLock, Timeout
 
 from litdata.constants import _DEBUG
-from litdata.debugger import _get_log_msg
+from litdata.debugger import ChromeTraceColors, _get_log_msg
+from litdata.streaming.async_prefetch import (
+    apply_async_pre_download_floor,
+    async_chunk_prefetch_enabled,
+    close_thread_event_loop,
+    download_chunk_indexes_concurrently,
+)
 from litdata.streaming.config import ChunksConfig, Interval
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader, TokensLoader
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
+from litdata.streaming.timing import StreamingTimingStats
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
 
@@ -45,10 +54,22 @@ _END_TOKEN = "END"  # noqa: S105
 # querying the queue and consuming too many CPU cycles.
 _DEFAULT_TIMEOUT = 0.1
 _LONG_DEFAULT_TIMEOUT = 5
+# Reconcile the advisory cache-byte counter with a directory scan every N successful deletes.
+_CACHE_SIZE_RECONCILE_EVERY = 8
 
 
 class PrepareChunksThread(Thread):
-    """This thread is responsible to download the chunks associated to a given worker."""
+    """Download chunks for a worker ahead of the reader.
+
+    Default path downloads one chunk at a time (sync). For remote datasets,
+    async chunk prefetch is **on by default** (override with
+    ``LITDATA_ASYNC_CHUNK_PREFETCH=0``): pending indexes are drained up to the
+    prefetch budget and downloaded concurrently via
+    :mod:`litdata.streaming.async_prefetch`.
+
+    Asyncio is scoped to **remote chunk IO overlap** only — not a fully async
+    ``StreamingDataLoader`` / training loop.
+    """
 
     def __init__(
         self,
@@ -62,12 +83,14 @@ class PrepareChunksThread(Thread):
         super().__init__(daemon=True)
         self._config = config
         self._item_loader = item_loader
-        self._max_pre_download = max_pre_download
+        # Async gather needs enough in-flight slots to overlap RTT; raise the
+        # floor when async prefetch is active (real-S3 benches: 2→4).
+        self._max_pre_download = apply_async_pre_download_floor(max_pre_download, remote_dir=config._remote_dir)
         self._pre_download_counter = 0
         self._distributed_env = distributed_env
         self._worker_env = _WorkerEnv.detect()
 
-        self._chunks_index_to_be_deleted: list[int] = []
+        self._chunks_index_to_be_deleted: deque[int] = deque()
         self._max_cache_size = max_cache_size
         self._parent_cache_dir = os.path.dirname(self._config._cache_dir)
         self._to_download_queue: Queue = Queue()
@@ -91,6 +114,18 @@ class PrepareChunksThread(Thread):
             print(f"Delete chunks when used: {self._delete_chunks_when_processed}")
 
         self._has_exited = False
+        # Advisory cache size for eviction decisions (avoid scanning the dir on every delete).
+        self._approx_cache_bytes = 0
+        self._cache_bytes_initialized = False
+        self._deletes_since_reconcile = 0
+        self._last_cache_reconcile_s = 0.0
+        self._timing = StreamingTimingStats.instance()
+        # Keep peak disk near ``max_cache_size`` under multi-worker prefetch.
+        self._cap_pre_download_for_cache_budget()
+
+    def _async_prefetch(self) -> bool:
+        """True when this prepare thread should batch-download via asyncio."""
+        return async_chunk_prefetch_enabled(self._config._remote_dir)
 
     def get_ready_event(self, chunk_index: int) -> Event:
         """Return (creating if needed) the readiness event for ``chunk_index``."""
@@ -165,10 +200,49 @@ class PrepareChunksThread(Thread):
             except Exception as e:
                 logger.warning(f"_apply_delete({chunk_index}): unexpected error removing {lock_path}: {e}")
 
-    def _apply_delete(self, chunk_index: int, skip_lock: bool = False) -> None:
-        """Inform the item loader of the chunk to delete."""
+    def _chunk_byte_size(self, chunk_index: int) -> int:
+        """Best-effort decompressed chunk size for advisory cache accounting."""
+        chunk_filepath, _, filesize_bytes = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+        filename = os.path.basename(chunk_filepath)
+        return int(self._config.filename_to_size_map.get(filename, filesize_bytes))
+
+    def _reconcile_cache_bytes(self) -> None:
+        try:
+            self._approx_cache_bytes = _get_folder_size(self._config._cache_dir, self._config)
+            self._cache_bytes_initialized = True
+            self._deletes_since_reconcile = 0
+        except Exception as e:
+            # Advisory only — never fail the prefetch loop because of a size scan.
+            logger.debug(f"_reconcile_cache_bytes failed: {e}")
+
+    def _ensure_cache_bytes(self) -> None:
+        if not self._cache_bytes_initialized:
+            self._reconcile_cache_bytes()
+
+    def _note_chunk_added(self, chunk_index: int) -> None:
+        try:
+            self._ensure_cache_bytes()
+            self._approx_cache_bytes += self._chunk_byte_size(chunk_index)
+        except Exception as e:
+            logger.debug(f"_note_chunk_added({chunk_index}) failed: {e}")
+
+    def _note_chunk_removed(self, chunk_index: int) -> None:
+        try:
+            self._ensure_cache_bytes()
+            self._approx_cache_bytes = max(0, self._approx_cache_bytes - self._chunk_byte_size(chunk_index))
+            self._deletes_since_reconcile += 1
+            if self._deletes_since_reconcile >= _CACHE_SIZE_RECONCILE_EVERY:
+                self._reconcile_cache_bytes()
+        except Exception as e:
+            logger.debug(f"_note_chunk_removed({chunk_index}) failed: {e}")
+
+    def _apply_delete(self, chunk_index: int, skip_lock: bool = False, *, release_slot: bool = True) -> None:
+        """Inform the item loader of the chunk to delete.
+
+        ``release_slot=False`` keeps the shared disk-slot reservation (used by
+        force-redownload, which replaces the file in place).
+        """
         logger.debug(f"_apply_delete({chunk_index}, skip_lock={skip_lock}) called")
-        can_delete_chunk = self._config.can_delete(chunk_index)
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
 
         # A chunk is deleted only once its reference count reaches zero, i.e. every worker that
@@ -188,10 +262,16 @@ class PrepareChunksThread(Thread):
 
         if _DEBUG:
             with open(chunk_filepath + ".tmb", "w+") as tombstone_file:
-                tombstone_file.write(f"Deleted {chunk_filepath} by {self._rank or 0}. Debug: {can_delete_chunk}")
+                tombstone_file.write(f"Deleted {chunk_filepath} by {self._rank or 0}.")
 
+        file_existed = os.path.exists(chunk_filepath)
         try:
             self._item_loader.delete(chunk_index, chunk_filepath)
+            self._note_chunk_removed(chunk_index)
+            # Only free a slot when we removed a real file that was counted toward
+            # the budget. Force-redownload keeps the reservation for the replacement.
+            if release_slot and file_existed:
+                self._release_cache_slot()
         except (FileNotFoundError, PermissionError) as e:
             logger.debug(f"_apply_delete({chunk_index}): could not remove data file: {e}")
 
@@ -219,18 +299,204 @@ class PrepareChunksThread(Thread):
         # Get the current cache size and decide whether we need to start cleanup. Otherwise, keep track of it
         while self._max_cache_size and self._chunks_index_to_be_deleted and self._can_delete_chunk():
             # Delete the oldest chunk
-            self._apply_delete(self._chunks_index_to_be_deleted.pop(0))
+            self._apply_delete(self._chunks_index_to_be_deleted.popleft())
         # Decrement the pre-download counter
         self._pre_download_counter -= 1
         return
 
+    def _drain_and_flush_deletes(self) -> None:
+        """Drain the delete queue and remove pending chunks before thread exit.
+
+        Normal ``_maybe_delete_chunks`` only pulls one queue item per call. At
+        END_TOKEN several indexes can still be queued (or stuck behind the
+        prefetch-window gate), which leaked the last chunk files / ``.lock``s.
+        """
+        while True:
+            chunk_index = _get_from_queue(self._to_delete_queue, timeout=0.0)
+            if chunk_index is None:
+                break
+            self._chunks_index_to_be_deleted.append(chunk_index)
+            self._pre_download_counter -= 1
+
+        if not self._max_cache_size:
+            return
+
+        # Shutdown: drop prefetch-window gating so delete-when-processed /
+        # over-budget caches actually empty.
+        while self._chunks_index_to_be_deleted:
+            if self._delete_chunks_when_processed or self._cache_over_budget():
+                self._apply_delete(self._chunks_index_to_be_deleted.popleft())
+            else:
+                break
+
+    def _cap_pre_download_for_cache_budget(self) -> None:
+        """Shrink per-worker prefetch so workers × chunks fit in ``max_cache_size``.
+
+        Applies whenever delete-when-processed is on — including tiny unit-test
+        budgets where the shared slot gate is disabled. Otherwise the async
+        ``max_pre_download`` floor (4) can keep more chunks on disk than the
+        budget allows (see ``test_reader_chunk_removal``).
+
+        Never caps below 2: ``max_pre_download == 1`` deadlocks delete-when-processed
+        gating (``_can_download_more`` needs a free slot while ``_can_delete_chunk``
+        and refcount skips can leave ``pre_download_counter`` stuck at 1).
+        """
+        if not self._max_cache_size or not self._delete_chunks_when_processed:
+            return
+        max_cache_size = self._max_cache_size
+        chunks = self._config._chunks or []
+        mean_chunk = max(1, int(self._config.num_bytes // max(1, len(chunks))))
+        n_workers = max(1, self._worker_env.world_size)
+        budget_chunks = max(1, int(max_cache_size // mean_chunk))
+        per_worker = max(1, budget_chunks // n_workers)
+        # Floor at 2 so tiny budgets still allow one in-flight + one retained chunk.
+        capped = max(2, per_worker)
+        if capped < self._max_pre_download:
+            logger.info(
+                "max_cache_size=%s (~%d chunks) with %d workers: capping max_pre_download %d → %d to limit peak disk",
+                self._max_cache_size,
+                budget_chunks,
+                n_workers,
+                self._max_pre_download,
+                capped,
+            )
+            self._max_pre_download = capped
+
+    def _cache_over_budget(self, *, reconcile: bool = False, extra_bytes: int = 0) -> bool:
+        """True when on-disk cache is at/over ``max_cache_size`` (node-wide folder)."""
+        if not self._max_cache_size:
+            return False
+        if reconcile:
+            # Rate-limit directory scans; multi-worker download decisions need a
+            # fresh view of the shared cache but not a scandir on every loop tick.
+            now = time()
+            if (now - self._last_cache_reconcile_s) >= 0.25:
+                self._reconcile_cache_bytes()
+                self._last_cache_reconcile_s = now
+            else:
+                self._ensure_cache_bytes()
+        else:
+            self._ensure_cache_bytes()
+        return (self._approx_cache_bytes + extra_bytes) >= self._max_cache_size
+
+    def _budget_paths(self) -> tuple[str, str]:
+        cache_dir = self._config._cache_dir
+        return (
+            os.path.join(cache_dir, ".litdata_cache_slots"),
+            os.path.join(cache_dir, ".litdata_cache_slots.lock"),
+        )
+
+    def _max_chunk_slots(self) -> int:
+        """How many chunk files may exist on disk for the configured budget."""
+        assert self._max_cache_size
+        chunks = self._config._chunks or []
+        mean_chunk = max(1, int(self._config.num_bytes // max(1, len(chunks) or 1)))
+        # +5% headroom matches the accepted overshoot for in-flight replace/tmp.
+        return max(1, int((self._max_cache_size * 1.05) // mean_chunk))
+
+    def _on_disk_chunk_count(self) -> int:
+        """Count ``chunk-*.bin`` files currently under the cache dir."""
+        cache_dir = self._config._cache_dir
+        try:
+            with os.scandir(cache_dir) as entries:
+                return sum(
+                    1
+                    for e in entries
+                    if e.is_file(follow_symlinks=False) and e.name.startswith("chunk-") and e.name.endswith(".bin")
+                )
+        except OSError:
+            return 0
+
+    def _read_used_slots_unlocked(self, slots_path: str) -> int:
+        """Return reserved slots, never below the on-disk chunk count.
+
+        The counter can drift low when force-redownload used to release-then-
+        download without re-acquiring; clamping to disk keeps the gate honest.
+        """
+        on_disk = self._on_disk_chunk_count()
+        try:
+            with open(slots_path, encoding="utf-8") as f:
+                used = int(f.read().strip() or "0")
+        except (FileNotFoundError, ValueError):
+            used = on_disk
+        if used < on_disk:
+            used = on_disk
+            try:
+                with open(slots_path, "w", encoding="utf-8") as f:
+                    f.write(str(used))
+            except OSError:
+                pass
+        return used
+
+    def _slot_budget_enabled(self) -> bool:
+        """Use shared chunk slots only for realistic on-disk budgets.
+
+        Tiny ``max_cache_size`` values in unit tests (e.g. 512 bytes) only force
+        delete-when-processed; engaging the multi-worker slot gate there deadlocks.
+        Require the budget to fit at least two mean chunks and be ≥10MB.
+        """
+        if not self._max_cache_size or not self._delete_chunks_when_processed:
+            return False
+        chunks = self._config._chunks or []
+        if not chunks:
+            return False
+        mean_chunk = max(1, int(self._config.num_bytes // max(1, len(chunks))))
+        return self._max_cache_size >= max(mean_chunk * 2, 10 * 1024 * 1024)
+
+    def _acquire_cache_slot(self, timeout_s: float = 30.0) -> bool:
+        """Reserve one chunk slot in the shared on-disk budget (multi-worker safe).
+
+        Returns False if no slot could be reserved — caller must **not** download
+        and should re-queue the chunk index instead.
+        """
+        if not self._slot_budget_enabled():
+            return True
+        slots_path, lock_path = self._budget_paths()
+        max_slots = self._max_chunk_slots()
+        deadline = time() + timeout_s
+        while time() < deadline:
+            try:
+                with FileLock(lock_path, timeout=0.2):
+                    used = self._read_used_slots_unlocked(slots_path)
+                    if used < max_slots:
+                        with open(slots_path, "w", encoding="utf-8") as f:
+                            f.write(str(used + 1))
+                        return True
+            except Timeout:
+                pass
+            # Free a slot by deleting a fully-consumed chunk, then retry.
+            self._maybe_delete_chunks(timeout=0.05)
+            sleep(0.05)
+        return False
+
+    def _release_cache_slot(self) -> None:
+        """Release one chunk slot after a successful delete."""
+        if not self._slot_budget_enabled():
+            return
+        slots_path, lock_path = self._budget_paths()
+        try:
+            with FileLock(lock_path, timeout=1):
+                try:
+                    with open(slots_path, encoding="utf-8") as f:
+                        used = int(f.read().strip() or "0")
+                except (FileNotFoundError, ValueError):
+                    used = 0
+                with open(slots_path, "w", encoding="utf-8") as f:
+                    f.write(str(max(0, used - 1)))
+        except Exception as e:
+            logger.debug(f"_release_cache_slot failed: {e}")
+
     def _can_delete_chunk(self) -> bool:
+        if self._max_cache_size is None:
+            return False
+        # Size always wins so multi-worker prefetch cannot ignore ``max_cache_size``.
+        # Shared-chunk safety is enforced in `_apply_pending_deletes` (in-use /
+        # refcount); ~5% overshoot from in-flight downloads is accepted.
+        if self._cache_over_budget():
+            return True
         if self._delete_chunks_when_processed:
             return self._pre_download_counter >= self._max_pre_download - 1
-        return (
-            self._max_cache_size is not None
-            and _get_folder_size(self._config._cache_dir, self._config) >= self._max_cache_size
-        )
+        return False
 
     def _pre_load_chunk(self, chunk_index: int) -> None:
         chunk_filepath, _, _ = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
@@ -252,16 +518,26 @@ class PrepareChunksThread(Thread):
                     self.mark_chunk_ready(chunk_index)
                     return
 
-                # force apply deletion before redownload
-                self._apply_delete(chunk_index, skip_lock=True)
+                had_file = os.path.exists(chunk_filepath)
+                # Replace in place: keep the existing disk-slot reservation when
+                # a partial/corrupt file occupied one. Missing files need a new
+                # slot before we download.
+                self._apply_delete(chunk_index, skip_lock=True, release_slot=False)
                 if _DEBUG:
                     print(
                         f"[Reader] Requested force download for {chunk_filepath} "
                         f"by {self._rank} at {datetime.now().isoformat()}"
                     )
 
+            if not had_file and not self._acquire_cache_slot():
+                # No budget left — retry later instead of exceeding max_cache_size.
+                self._force_download_queue.put(chunk_index)
+                sleep(0.05)
+                return
+
             self._config.download_chunk_from_index(chunk_index, skip_lock=True)
             self.mark_chunk_ready(chunk_index)
+            self._note_chunk_added(chunk_index)
         except Timeout:
             # Another worker is actively downloading this chunk. Defer to them.
             return
@@ -274,13 +550,107 @@ class PrepareChunksThread(Thread):
         # Avoid downloading too many chunks in advance at the risk of over using the disk space
         self._pre_download_counter += 1
 
+    def _finalize_downloaded_chunk(self, chunk_index: int, *, existed: bool) -> None:
+        """Mark ready / account cache / optionally pre-load after a chunk download."""
+        chunk_filepath, _, filesize_bytes = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
+        if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
+            self.mark_chunk_ready(chunk_index)
+        if not existed:
+            self._note_chunk_added(chunk_index)
+        if self._pre_download_counter > 0:
+            self._pre_load_chunk(chunk_index)
+        self._pre_download_counter += 1
+
+    def _download_chunk_indexes(self, chunk_indexes: list[int]) -> None:
+        """Download one or more chunk indexes (sync, or concurrent when env-enabled)."""
+        if not chunk_indexes:
+            return
+        # Respect the shared disk budget before bringing new bytes onto disk.
+        pending: list[int] = []
+        deferred: list[int] = []
+        existed: dict[int, bool] = {}
+        for idx in chunk_indexes:
+            path = self._config[ChunkedIndex(index=-1, chunk_index=idx)][0]
+            already = os.path.exists(path)
+            existed[idx] = already
+            if already:
+                continue
+            if self._acquire_cache_slot():
+                # Another worker may have finished between the exists check and
+                # the slot reservation — drop the spare slot and skip download.
+                if os.path.exists(path):
+                    self._release_cache_slot()
+                    existed[idx] = True
+                    continue
+                pending.append(idx)
+            else:
+                # No disk slot — retry later instead of blowing past max_cache_size.
+                deferred.append(idx)
+
+        t0 = self._timing.start()
+        for chunk_index in pending:
+            logger.debug(
+                _get_log_msg(
+                    {
+                        "name": f"prefetch_download_chunk_{chunk_index}",
+                        "ph": "B",
+                        "cname": ChromeTraceColors.TEAL,
+                    }
+                )
+            )
+        if pending:
+            if self._async_prefetch() and len(pending) > 1:
+                download_chunk_indexes_concurrently(self._config, pending)
+            else:
+                for chunk_index in pending:
+                    self._config.download_chunk_from_index(chunk_index)
+
+        for chunk_index in pending:
+            logger.debug(
+                _get_log_msg(
+                    {
+                        "name": f"prefetch_download_chunk_{chunk_index}",
+                        "ph": "E",
+                        "cname": ChromeTraceColors.TEAL,
+                    }
+                )
+            )
+        self._timing.record("chunk_download_s", t0)
+        # Finalize only chunks we own / already had — not deferred ones.
+        for chunk_index, was_there in existed.items():
+            if chunk_index in deferred:
+                continue
+            self._finalize_downloaded_chunk(chunk_index, existed=was_there)
+        if deferred:
+            # Avoid a tight requeue spin when every worker is waiting on a slot.
+            if not pending:
+                sleep(0.05)
+            for chunk_index in deferred:
+                self._to_download_queue.put(chunk_index)
+
     def run(self) -> None:
+        try:
+            self._run_loop()
+        finally:
+            # Drop thread-local asyncio loop + default-executor workers
+            # (``asyncio_N``) created by async chunk prefetch / to_thread.
+            close_thread_event_loop()
+
+    def _run_loop(self) -> None:
         while True:
             if self._force_stop_event.is_set():
                 self._has_exited = True
                 return
 
             can_download_more = self._pre_download_counter < self._max_pre_download
+            over_budget = False
+            if self._slot_budget_enabled():
+                # Prefer eviction when over the shared disk budget so multi-worker
+                # runs converge toward max_cache_size.
+                over_budget = self._cache_over_budget(reconcile=True)
+                if over_budget:
+                    self._maybe_delete_chunks(timeout=0.0)
+
             # Non-blocking force/delete polls while download work can still proceed, so we do not
             # pay ~0.2s of empty-queue sleep per chunk. When the prefetch buffer is full, keep a
             # short timeout so force-download requests are not blocked behind a long delete wait.
@@ -292,23 +662,30 @@ class PrepareChunksThread(Thread):
                 chunk_index = _get_from_queue(self._to_download_queue)
                 if chunk_index == _END_TOKEN:
                     if self._max_cache_size:
-                        self._maybe_delete_chunks(timeout=_DEFAULT_TIMEOUT)
+                        self._drain_and_flush_deletes()
                     self._has_exited = True
                     return
 
                 if chunk_index is not None:
-                    self._config.download_chunk_from_index(chunk_index)
-                    chunk_filepath, _, filesize_bytes = self._config[ChunkedIndex(index=-1, chunk_index=chunk_index)]
-                    if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes:
-                        self.mark_chunk_ready(chunk_index)
-
-                    # Preload item if possible to gain some time but only
-                    # if this is one of the pre-downloaded chunk
-                    if self._pre_download_counter > 0:
-                        self._pre_load_chunk(chunk_index)
-
-                    # Avoid downloading too many chunks in advance at the risk of over using the disk space
-                    self._pre_download_counter += 1
+                    batch = [chunk_index]
+                    # Optionally drain more pending indexes up to the prefetch budget so
+                    # asyncio.gather can overlap remote downloads. When over disk budget,
+                    # download one chunk at a time so deletes can catch up.
+                    if self._async_prefetch() and not over_budget:
+                        slots_left = self._max_pre_download - self._pre_download_counter - 1
+                        while slots_left > 0:
+                            # Non-blocking drain: a 0.1s Empty wait per missing
+                            # slot would serialize gather and erase async overlap.
+                            nxt = _get_from_queue(self._to_download_queue, timeout=0.0)
+                            if nxt is None:
+                                break
+                            if nxt == _END_TOKEN:
+                                # Put END back so the next loop iteration exits cleanly.
+                                self._to_download_queue.put(_END_TOKEN)
+                                break
+                            batch.append(nxt)
+                            slots_left -= 1
+                    self._download_chunk_indexes(batch)
 
             if self._max_cache_size:
                 self._maybe_delete_chunks(timeout=side_timeout)
@@ -507,6 +884,8 @@ class BinaryReader:
 
         # Fetch the element
         chunk_filepath, begin, filesize_bytes = self.config[index]
+        timing = StreamingTimingStats.instance()
+        decode_t0 = timing.start()
 
         if isinstance(self._item_loader, PyTreeLoader):
             if (
@@ -529,6 +908,7 @@ class BinaryReader:
             item = self._item_loader.load_item_from_chunk(
                 index.index, index.chunk_index, chunk_filepath, begin, filesize_bytes
             )
+        timing.record("item_decode_s", decode_t0)
 
         # We need to request deletion after the latest element has been loaded.
         # Otherwise, this could trigger segmentation fault error depending on the item loader used.

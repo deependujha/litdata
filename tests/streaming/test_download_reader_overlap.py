@@ -26,6 +26,7 @@ def test_prefetch_side_polls_are_nonblocking_when_download_work_available(monkey
     config = MagicMock(spec=ChunksConfig)
     config.num_bytes = 1024
     config._cache_dir = cache_dir
+    config._remote_dir = None
     config.download_chunk_from_index = MagicMock()
     item_loader = MagicMock()
     env = _DistributedEnv(1, 0, 1)
@@ -57,6 +58,7 @@ def test_prefetch_side_polls_use_short_timeout_when_buffer_full(monkeypatch, tmp
     config = MagicMock(spec=ChunksConfig)
     config.num_bytes = 1024
     config._cache_dir = cache_dir
+    config._remote_dir = None
     item_loader = MagicMock()
     env = _DistributedEnv(1, 0, 1)
 
@@ -170,6 +172,9 @@ def test_s3_downloader_does_not_publish_partial_final_path(monkeypatch, tmpdir):
                 sleep(0.05)
                 f.write(b"-complete")
 
+    # Force the boto3 fallback path so FakeClient is exercised (obstore is the
+    # default when installed and would try real AWS credentials here).
+    monkeypatch.setattr(downloader_mod, "_OBSTORE_AVAILABLE", False)
     monkeypatch.setattr(downloader_mod, "S3Client", FakeClient)
     local_filepath = os.path.join(tmpdir, "chunk.bin")
     seen_final_sizes: list[int] = []

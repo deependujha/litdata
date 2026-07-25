@@ -13,6 +13,7 @@
 
 import logging
 import os
+from collections import deque
 from collections.abc import Callable
 from time import time
 from typing import Any
@@ -162,19 +163,26 @@ class StreamingDataset(IterableDataset):
         max_cache_size_in_bytes = int(
             _convert_bytes_to_int(max_cache_size) if isinstance(max_cache_size, str) else max_cache_size,
         )
+        # Peak on-disk cache ≈ num_workers × max_pre_download × mean_chunk_size.
+        # For ~64MB chunks and a full machine (e.g. 48 workers × prefetch 2–4), that
+        # is already ~5–12GB before in-flight downloads. Warn below 25GB so limited
+        # budgets leave headroom instead of thrashing under multi-worker streaming.
         min_cache_size_in_bytes = _convert_bytes_to_int("25GB")
         if max_cache_size_in_bytes < min_cache_size_in_bytes:
             logger.warning(
                 "The provided `max_cache_size` is less than 25GB. "
-                "This may lead to performance issues during the training process. "
-                "Consider increasing the `max_cache_size` to at least 25GB to avoid potential performance degradation."
+                "With many DataLoader workers and ~64MB chunks, peak cache is roughly "
+                "`num_workers * max_pre_download * chunk_size` (often 5–12GB). "
+                "Consider increasing `max_cache_size` to at least 25GB to avoid eviction thrash."
             )
 
         self.cache: Cache | None = None
         self.worker_env: _WorkerEnv | None = None
         self.worker_chunks: list[int] = []  # chunk indexes that the current worker will download, read & stream
         self.worker_intervals: list[list[int]] = []  # chunk index intervals for the current worker
-        self.upcoming_indexes: list[int] = []  # contains list of upcoming indexes to be processed
+        # Upcoming in-chunk sample indexes for this worker. ``deque`` keeps ``popleft`` O(1);
+        # a list ``pop(0)`` would be O(n) per sample for large chunks.
+        self.upcoming_indexes: deque[int] = deque()
 
         # which index of the array `self.worker_chunks` will we work on after this chunk is completely consumed
         self.worker_next_chunk_index = 0
@@ -356,7 +364,10 @@ class StreamingDataset(IterableDataset):
         if os.getenv("DATA_OPTIMIZER_GLOBAL_RANK"):
             self.distributed_env = _DistributedEnv.detect()
 
-        self.worker_env = _WorkerEnv.detect()
+        # Threaded StreamingDataLoader sets ``_forced_worker_env`` so each loader thread
+        # gets a distinct rank without relying on torch's process-worker ``get_worker_info``.
+        forced_worker_env = getattr(self, "_forced_worker_env", None)
+        self.worker_env = forced_worker_env if forced_worker_env is not None else _WorkerEnv.detect()
         self.cache = self._create_cache(worker_env=self.worker_env)
         self.shuffler = self._create_shuffler(self.cache)
         self.on_demand_bytes = False  # reset on_demand_bytes to False, and store chunks in the cache
@@ -407,7 +418,7 @@ class StreamingDataset(IterableDataset):
             self._resume(workers_chunks, workers_intervals)
         else:
             self.num_chunks = len(self.worker_chunks)
-            self.upcoming_indexes = []
+            self.upcoming_indexes = deque()
             self.worker_next_chunk_index = 0
             self.global_index = 0
             self.consumed_sample_count_in_curr_chunk = 0
@@ -466,7 +477,7 @@ class StreamingDataset(IterableDataset):
 
         # skip any indexes already consumed
         current_indexes = current_indexes[indexes[worker_local_rank] :]
-        self.upcoming_indexes = current_indexes
+        self.upcoming_indexes = deque(current_indexes)
 
         self.global_index = indexes[worker_local_rank]
 
@@ -530,14 +541,14 @@ class StreamingDataset(IterableDataset):
 
             assert self.shuffler is not None
             assert self.num_chunks is not None
-            self.upcoming_indexes = self.shuffler(
-                current_indexes, self.num_chunks, self.current_epoch, self.worker_next_chunk_index
+            self.upcoming_indexes = deque(
+                self.shuffler(current_indexes, self.num_chunks, self.current_epoch, self.worker_next_chunk_index)
             )
 
             self.worker_next_chunk_index += 1  # bump the chunk_index
 
-        # Get the first index
-        index = self.upcoming_indexes.pop(0)
+        # Get the first index (O(1) with deque)
+        index = self.upcoming_indexes.popleft()
 
         chunk_indexes = None if self.has_triggered_download else self.worker_chunks[self.worker_next_chunk_index - 1 :]
         is_last_index = (self.worker_next_chunk_index) == self.num_chunks and len(self.upcoming_indexes) == 0

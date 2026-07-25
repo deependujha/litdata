@@ -48,6 +48,24 @@ Interval = namedtuple("Interval", ["chunk_start", "roi_start_idx", "roi_end_idx"
 logger = logging.getLogger("litdata.streaming.item_loader")
 
 
+def _open_chunk_file(chunk_filepath: str) -> FileIO:
+    """Open a chunk for reading, retrying Windows ``PermissionError`` races.
+
+    On Windows, antivirus / ``os.replace`` from decompression can briefly deny
+    ``open()`` even after the file exists at the expected size. Retry with a short
+    backoff instead of failing the read.
+    """
+    last_err: PermissionError | None = None
+    for attempt in range(20):
+        try:
+            return open(chunk_filepath, "rb", 0)
+        except PermissionError as e:
+            last_err = e
+            sleep(0.05)
+    assert last_err is not None
+    raise last_err
+
+
 # Module-level unflatten callables (not nested closures) so item loaders remain picklable for
 # DataLoader workers under the ``spawn`` start method.
 
@@ -400,7 +418,7 @@ class PyTreeLoader(BaseItemLoader):
             # decrypted whole) and not shared with another worker (a shared chunk can be
             # deleted/replaced by a co-worker while mapped -> SIGSEGV; see issues #459, #756).
             if self._config.get("encryption") or chunk_index not in self._mmap_allowed_chunks:
-                self._open_handle = open(chunk_filepath, "rb", 0)  # noqa: SIM115
+                self._open_handle = _open_chunk_file(chunk_filepath)
             else:
                 self._open_chunk_mmap(chunk_filepath, chunk_index)
 
@@ -505,7 +523,7 @@ class PyTreeLoader(BaseItemLoader):
 
     def _open_chunk_mmap(self, chunk_filepath: str, chunk_index: int) -> None:
         """Memory-map a chunk and cache its offset table (``uint32[num_items + 1]``)."""
-        handle = open(chunk_filepath, "rb", 0)  # noqa: SIM115
+        handle = _open_chunk_file(chunk_filepath)
         chunk_mmap = mmap.mmap(handle.fileno(), 0, access=mmap.ACCESS_READ)
         # Prefer the on-disk header over index.json so a mismatched/stale index cannot
         # silently over-read the offset table into the item payload.
@@ -889,12 +907,7 @@ class ParquetLoader(BaseItemLoader):
             del self._chunk_filepaths[chunk_filepath]
 
         if chunk_filepath not in self._chunk_filepaths:
-            exists = os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes
-
-            while not exists:
-                sleep(0.1)
-                exists = os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes
-
+            self._wait_until_chunk_ready(chunk_index, chunk_filepath, filesize_bytes)
             self._chunk_filepaths[chunk_filepath] = True
 
         # relative index of the desired row within the chunk.
