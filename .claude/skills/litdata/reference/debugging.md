@@ -1,5 +1,28 @@
 # Debugging & profiling LitData
 
+## StreamingDataLoader profiling (viztracer)
+
+User-facing DataLoader worker CPU trace — complementary to `enable_tracer()` below.
+
+```python
+from litdata import StreamingDataset, StreamingDataLoader
+
+loader = StreamingDataLoader(
+    StreamingDataset("s3://bucket/data"),
+    batch_size=64,
+    num_workers=4,              # required
+    profile_batches=20,         # or True for full iterator
+    profile_skip_batches=5,     # skip cold batches
+    profile_dir="./profiles",   # → profiles/result.json
+)
+```
+
+- Needs `pip install viztracer`. Raises if `num_workers == 0`.
+- Only **global rank 0** + **worker 0** are instrumented (`dataloader.py` `_ProfileWorkerLoop`).
+- `int` → stop after `profile_skip_batches + profile_batches` `fetcher.fetch` calls; `True` → until worker loop ends.
+- Overwrites existing `result.json`. View in `chrome://tracing` or Perfetto.
+- Full user doc: README `#profile-loading`; cookbook: [using-litdata.md](using-litdata.md) §7.
+
 ## Breakpoints inside worker processes
 
 Normal `breakpoint()` doesn't work in DataLoader or `optimize`/`map` worker subprocesses (no stdin). Use LitData's multiprocessing-safe pdb, which reopens `sys.stdin` under a lock (`utilities/breakpoint.py:33`, exported as `litdata.breakpoint`):
@@ -38,30 +61,22 @@ litracer litdata_debug.log -o litdata_trace.json -w 100
 
 `enable_tracer(flush_interval=5, item_loader=True, iterating_dataset=True, getitem_dataset_for_chunk_index=True)` sets the `LITDATA_LOG_*` env vars and returns a singleton `LitDataLogger`. `TimedFlushFileHandler` flushes every N seconds from a daemon thread. `env_info()` auto-injects distributed + worker rank/world-size into every event. `ChromeTraceColors` holds trace phase colors.
 
-## Environment-variable knobs (`constants.py` + `debugger.py`)
+## Environment variables
 
-| Env var                                | Effect                                                         | Default               |
-| -------------------------------------- | -------------------------------------------------------------- | --------------------- |
-| `LITDATA_CACHE_DIR`                    | Override the chunk cache directory                             | `~/.lightning/chunks` |
-| `DEBUG_LITDATA`                        | Enable internal debug behavior (`_DEBUG`)                      | `0`                   |
-| `PRINT_DEBUG_LOGS`                     | Print debug logs to stdout                                     | `0`                   |
-| `MAX_WAIT_TIME`                        | Max seconds to wait for a chunk download                       | `120`                 |
-| `FORCE_DOWNLOAD_TIME`                  | Force re-download threshold (s)                                | `30`                  |
-| `LITDATA_ASYNC_CHUNK_PREFETCH`         | `1`/`0` force async chunk gather on/off; unset = on for remote | unset                 |
-| `LITDATA_ASYNC_MIN_PRE_DOWNLOAD`       | Floor for `max_pre_download` when async on (`0` = no floor)    | `4`                   |
-| `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB` | obstore `stream(min_chunk_size=…)` in MiB                      | `8`                   |
-| `LITDATA_TIMING`                       | Enable `StreamingTimingStats`                                  | unset                 |
-| `LITDATA_LOG_FILE`                     | Trace log file path                                            | `litdata_debug.log`   |
-| `LITDATA_LOG_LEVEL`                    | Trace log level                                                | `DEBUG`               |
-| `LITDATA_LOG_ITERATING_DATASET`        | Include `iterating_dataset` events                             | `True`                |
-| `LITDATA_LOG_GETITEM`                  | Include `getitem_dataset_for_chunk_index` events               | `True`                |
-| `LITDATA_LOG_ITEM_LOADER`              | Include `item_loader` events                                   | `True`                |
-| `LITDATA_DISABLE_VERSION_CHECK`        | Skip the upgrade prompt                                        | `0`                   |
-| `ENABLE_STATUS_REPORT`                 | Emit status reports                                            | `0`                   |
+Categorized catalog (streaming, async prefetch, debug, `DATA_OPTIMIZER_*`, Studio, HF): **[env-vars.md](env-vars.md)**.
 
-`optimize`/`map` cross-node coordination: `DATA_OPTIMIZER_NODE_RANK`, `DATA_OPTIMIZER_NUM_NODES`, `DATA_OPTIMIZER_GLOBAL_RANK`, `DATA_OPTIMIZER_NUM_WORKERS`.
+Quick hits:
 
-Cache CLI: `litdata cache path` (print dir) · `litdata cache clear` (rmtree it).
+| Env                                     | Default               | Effect                                             |
+| --------------------------------------- | --------------------- | -------------------------------------------------- |
+| `LITDATA_CACHE_DIR`                     | `~/.lightning/chunks` | Default chunk cache                                |
+| `LITDATA_ASYNC_CHUNK_PREFETCH`          | on for remote         | `0`/`1` force async chunk download overlap         |
+| `LITDATA_ASYNC_MIN_PRE_DOWNLOAD`        | `4`                   | Floor `max_pre_download` when async on (`0` = off) |
+| `MAX_WAIT_TIME` / `FORCE_DOWNLOAD_TIME` | `120` / `30`          | Chunk wait / force re-download                     |
+| `DEBUG_LITDATA` / `PRINT_DEBUG_LOGS`    | `0`                   | Internal debug / stdout                            |
+| `LITDATA_LOG_*`                         | see env-vars          | `enable_tracer()` log file and event filters       |
+
+Cache CLI: `litdata cache path` · `litdata cache clear`.
 
 ## Common failure modes
 
