@@ -85,6 +85,8 @@ Install all the extras
 pip install 'litdata[extras]'
 ```
 
+On Linux/macOS, `[extras]` includes optional `uvloop` for a faster asyncio event loop used by `StreamingRawDataset` (stdlib asyncio is the fallback when it is not installed).
+
 </details>
 
 <details>
@@ -175,7 +177,7 @@ if __name__ == "__main__":
         inputs=list(range(1000)),           # the inputs to the function (here it's a list of numbers)
         output_dir="fast_data",             # optimized data is stored here
         num_workers=4,                      # the number of workers on the same machine
-        chunk_bytes="64MB"                  # size of each chunk
+        chunk_bytes="64MB"                  # default; see FAQ for larger samples
     )
 ```
 
@@ -333,6 +335,12 @@ for batch in loader:
 | `transform` | `None` | `fn(bytes) -> Any` or `fn(list[bytes]) -> Any` for grouped items |
 | `storage_options` | `{}` | Cloud client options |
 | `indexer` | `FileIndexer()` | Custom discovery (subclass `BaseIndexer`) |
+| `max_concurrent_downloads` | `None` (adaptive) | Per-worker in-flight downloads. `None` = size-aware budget (bandwidth; Little’s-law only for medians &lt;~8 MiB) split across workers; single-process capped at 128. An explicit `int` is used exactly (no silent clamp) |
+| `max_prefetch` | `16` | Per-worker sequential look-ahead after each batch (default on). When `num_workers > 1`, effective look-ahead is `min(max_prefetch, 64 // num_workers)` so aggregate stays ~64 items. Pass `0` to disable |
+| `prefetch_cache_size` | auto | LRU cap for prefetched items (defaults from `max_prefetch`) |
+| `hedge_delay` | `0` | Seconds before a hedged duplicate GET for a slow download (`0` = off, default; opt-in) |
+| `range_parallel_threshold` | `0` | Objects ≥ this many bytes use parallel ranged GETs (`0` = whole-object only; opt-in) |
+| `item_type` | `"bytes"` | `"bytes"` buffers in RAM; `"path"` returns local cache paths (`cache_files=True` required) |
 
 ### Group related files (`setup`)
 
@@ -399,9 +407,25 @@ raw: bytes = dataset[0]
 
 ### Tips
 
-- Prefer `num_workers > 0` so worker processes overlap async batch downloads with training.
-- Studio: pass `/teamspace/s3_connections/...` so LitData hits the bucket directly ([resolver](#resolve-paths)).
-- When throughput plateaus, run a one-time [`optimize`](#speed-up-model-training) and switch to `StreamingDataset` + `StreamingDataLoader`.
+- Prefer `num_workers > 0` so worker processes overlap async batch downloads with training. Scale workers toward host vCPUs for network-bound JPEG-sized objects — avoid saturating every vCPU.
+- On Linux, after any parent-process dataset I/O, use `DataLoader(..., multiprocessing_context="spawn", persistent_workers=True)` — default `fork` can hang S3 clients in workers.
+- Default `max_prefetch=16` enables sequential look-ahead **per DataLoader worker**; shuffled access disables it. Pass `0` to turn off. When `num_workers > 1`, look-ahead and download concurrency both scale down with worker count so aggregate in-flight work stays bounded.
+- Prefer an `s3://` / `gs://` URL or `/teamspace/s3_connections/...` so LitData hits the bucket directly ([resolver](#resolve-paths)) — avoid reading through FUSE.
+- Leave `range_parallel_threshold=0` (default) for typical JPEGs; raise it only for large objects where parallel ranged GETs help.
+- Best for medium/large files. Tiny objects (≲100 KB) are request-overhead bound — pack with [`optimize`](#speed-up-model-training) → `StreamingDataset` when I/O plateaus.
+
+### Throughput
+
+On ImageNet val raw over S3 (50 k JPEGs, batch size 64, spawn workers), throughput gains are clearest at **low worker counts / notebooks** (**+20–80%** at ≤8 workers). At **high workers** (≥16), results are roughly **parity within run-to-run noise**.
+
+| workers | before | after | Δ |
+|--------:|-------:|------:|--:|
+| 0 | 543 | 735 | **+35%** |
+| 2 | 816 | 1475 | **+81%** |
+| 8 | 4841 | 5718 | **+18%** |
+| 16+ | ~6k | ~6k | ~parity |
+
+Useful knobs: `num_workers`, `max_prefetch` (default 16; worker-aware), `download_timeout` (batch-level hang protection). Ranged parallel downloads stay opt-in (`range_parallel_threshold=0`).
 
 </details>
 
@@ -717,6 +741,35 @@ loader = StreamingDataLoader(train, batch_size=64, shuffle=True, drop_last=True)
 - Val/test: usually `shuffle=False`, `drop_last=False`.
 - If `drop_last=False` under multi-GPU, LitData warns — collectives can hang when ranks see different lengths.
 - Resume with `loader.state_dict()` / `load_state_dict()`. To deliberately ignore checkpointed shuffle settings, set `force_override_state_dict=True` on the dataset.
+
+</details>
+
+<details>
+  <summary> ✅ FAQ: chunk size &amp; shuffle before optimize <a id="faq-chunk-shuffle" href="#faq-chunk-shuffle">🔗</a> </summary>
+&nbsp;
+
+### What `chunk_bytes` should I use?
+
+Default is **64MB** — a good starting point for typical small/medium samples.
+
+When each datapoint is large (e.g. a few MB), prefer a **larger chunk** (practical range often **256–512MB**) so each chunk holds more samples and **intra-chunk batch randomization** has a bigger pool. Tradeoff: larger chunks take **longer to download** before they can be used.
+
+This is expert guidance (recommended-range mindset), not a published chunk-size sweep.
+
+### Is StreamingDataset shuffle enough if my source data is ordered?
+
+**Not always.** LitData handles **distributed sampling** and **bucket sampling within chunks** automatically (`shuffle=True` randomizes chunk order and item order inside each chunk). That is **not** a substitute for a fully shuffled file-level DataLoader when the source has strong structure (same subject/set contiguous, class blocks, etc.).
+
+If ordered data would make chunked sampling problematic and you cannot embed the grouping as the sample unit:
+
+- Shuffle the list of samples **before** `optimize` so chunks mix well, **or**
+- Use [`StreamingRawDataset`](#stream-raw) (per-file random access via a standard PyTorch `DataLoader` with `shuffle=True`) instead of optimize → `StreamingDataset`.
+
+### FUSE vs LitData (Lightning Studios)
+
+`/teamspace/s3_connections` (and related mounts) are **FUSE** — fine for browsing, not for training I/O. Under load they are very slow and can crash. Pass the same path into LitData (`StreamingRawDataset` / `StreamingDataset` / `optimize`): LitData resolves it and talks **directly** to the bucket ([Resolve any path](#resolve-paths)).
+
+Rough ImageNet order-of-magnitude on a Studio (not hard guarantees; right tuning for raw): FUSE hand-read ~**600** images/s · [`StreamingRawDataset`](#stream-raw) ~**6–7k** · optimized [`StreamingDataset`](#speed-up-model-training) (64MB chunks) ~**11k**.
 
 </details>
 
@@ -1098,7 +1151,7 @@ if __name__ == "__main__":
 
 Mix and match different sets of data to experiment and create better models.
 
-Combine datasets with `CombinedStreamingDataset`.  As an example, this mixture of [Slimpajama](https://huggingface.co/datasets/cerebras/SlimPajama-627B) & [StarCoder](https://huggingface.co/datasets/bigcode/starcoderdata) was used in the [TinyLLAMA](https://github.com/jzhang38/TinyLlama) project to pretrain a 1.1B Llama model on 3 trillion tokens.
+Combine datasets with `CombinedStreamingDataset`.  As an example, this mixture of [Slimpajama](https://www.cerebras.ai/blog/slimpajama-a-627b-token-cleaned-and-deduplicated-version-of-redpajama) & [StarCoder](https://huggingface.co/datasets/bigcode/starcoderdata) was used in the [TinyLLAMA](https://github.com/jzhang38/TinyLlama) project to pretrain a 1.1B Llama model on 3 trillion tokens.
 
 ```python
 from litdata import StreamingDataset, CombinedStreamingDataset, StreamingDataLoader, TokensLoader
@@ -2218,7 +2271,7 @@ Full knob list for `litdata.optimize` (see Quick start for the minimal recipe). 
 | `output_dir` | `"optimized_data"` | Local or cloud ([resolver](#resolve-paths)); version remote prefixes |
 | `input_dir` | `None` | Remote input root for background download |
 | `weights` | `None` | Per-input weights to balance workers |
-| `chunk_bytes` | `None` | Max bytes per chunk (e.g. `"64MB"`) |
+| `chunk_bytes` | `None` | Max bytes per chunk (e.g. `"64MB"`; see [FAQ](#faq-chunk-shuffle) for larger samples) |
 | `chunk_size` | `None` | Max items (or tokens with `TokensLoader`) per chunk |
 | `align_chunking` | `False` | Match single-worker chunk boundaries (needs `chunk_size`; uneven load) |
 | `compression` | `None` | `"zstd"` today |
@@ -2410,7 +2463,7 @@ Below are templates for real-world applications of LitData at scale.
 | -------------------------------- | ----------------- | ----------------- | -------------- | -------------- |
 | [Benchmark cloud data-loading libraries](https://lightning.ai/lightning-ai/studios/benchmark-cloud-data-loading-libraries) | Image & Label | 10 | 1 | [Imagenet 1M](https://paperswithcode.com/sota/image-classification-on-imagenet?tag_filter=171) |
 | [Optimize GeoSpatial data for model training](https://lightning.ai/lightning-ai/studios/convert-spatial-data-to-lightning-streaming) | Image & Mask | 120 | 32 | [Chesapeake Roads Spatial Context](https://github.com/isaaccorley/chesapeakersc) |
-| [Optimize TinyLlama 1T dataset for training](https://lightning.ai/lightning-ai/studios/prepare-the-tinyllama-1t-token-dataset) | Text | 240 | 32 | [SlimPajama](https://huggingface.co/datasets/cerebras/SlimPajama-627B) & [StarCoder](https://huggingface.co/datasets/bigcode/starcoderdata) |
+| [Optimize TinyLlama 1T dataset for training](https://lightning.ai/lightning-ai/studios/prepare-the-tinyllama-1t-token-dataset) | Text | 240 | 32 | [SlimPajama](https://www.cerebras.ai/blog/slimpajama-a-627b-token-cleaned-and-deduplicated-version-of-redpajama) & [StarCoder](https://huggingface.co/datasets/bigcode/starcoderdata) |
 | [Optimize parquet files for model training](https://lightning.ai/lightning-ai/studios/convert-parquets-to-lightning-streaming) | Parquet Files | 12 | 16 | Randomly Generated data |
 
 &nbsp;

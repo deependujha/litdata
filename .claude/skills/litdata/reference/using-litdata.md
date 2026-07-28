@@ -8,19 +8,25 @@ ______________________________________________________________________
 
 ## 1. Choose a workflow
 
-| Goal                                          | API                                                     |
-| --------------------------------------------- | ------------------------------------------------------- |
-| Stream files as-is (no preprocess)            | **`StreamingRawDataset`** + torch `DataLoader`          |
-| Fastest training I/O                          | `optimize` → `StreamingDataset` + `StreamingDataLoader` |
-| Parallel side effects (resize, scrape, embed) | `map`                                                   |
-| Weighted mix                                  | `CombinedStreamingDataset`                              |
-| One sample from each dataset / cycle length   | `ParallelStreamingDataset`                              |
-| Existing MDS / Parquet / HF parquet           | `StreamingDataset` (+ `ParquetLoader` when needed)      |
-| LLM token windows                             | `TokensLoader` on optimize **and** stream               |
+| Goal                                             | API                                                                                                                    |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| Stream files as-is (no preprocess)               | **`StreamingRawDataset`** + torch `DataLoader`                                                                         |
+| Full control / per-file access & grouping        | **`StreamingRawDataset`** (`setup` for groups; raw `bytes`) — tradeoff: optimized still faster, raw not too far behind |
+| Fastest training I/O                             | `optimize` → `StreamingDataset` + `StreamingDataLoader`                                                                |
+| Strong source ordering / need file-level shuffle | Prefer **`StreamingRawDataset`** + `DataLoader(shuffle=True)`, **or** **shuffle the sample list before** `optimize`    |
+| Parallel side effects (resize, scrape, embed)    | `map`                                                                                                                  |
+| Weighted mix                                     | `CombinedStreamingDataset`                                                                                             |
+| One sample from each dataset / cycle length      | `ParallelStreamingDataset`                                                                                             |
+| Existing MDS / Parquet / HF parquet              | `StreamingDataset` (+ `ParquetLoader` when needed)                                                                     |
+| LLM token windows                                | `TokensLoader` on optimize **and** stream                                                                              |
 
-**Rule:** `StreamingRawDataset` = zero prep, native files (often enough to ship). Optimized = chunk once, then stream fastest. Many teams start raw, then `optimize` when I/O binds.
+**Rule:** `StreamingRawDataset` = zero prep, native files, full control over grouping/order (often enough to ship). Optimized = chunk once, then stream fastest. Many teams start raw, then `optimize` when I/O binds.
 
-Full raw API → §10. README: `#stream-raw`.
+**Ordered sources:** intra-chunk randomization + randomizing chunk order is **not** a full file-level shuffle. If same subject/class blocks are contiguous and that would bias batches, **shuffle the list of samples before `optimize()`** or stay on raw (§5 / FAQ below).
+
+**Studio paths:** `/teamspace/s3_connections` & co are FUSE (convenience only — slow / can crash under load). Always pass those paths to LitData so it talks **directly** to remote storage (§4).
+
+Full raw API → §10. README: `#stream-raw`. README FAQ: `#faq-chunk-shuffle`.
 
 ______________________________________________________________________
 
@@ -83,7 +89,7 @@ ______________________________________________________________________
 
 ## 4. Paths & resolver (load [resolver.md](resolver.md))
 
-**Always resolve paths through LitData.** In Studio, `/teamspace/s3_connections` & co are **FUSE** over S3/GCS/**R2** (`lightning_storage`); LitData resolves them to the backing URL and talks to the store directly — faster and more reliable than opening the mount by hand.
+**Always resolve paths through LitData — never read Studio mounts by hand.** `/teamspace/s3_connections` & co are **FUSE** mounts (convenience only): under load they are **very slow** and can **crash**. LitData resolves those paths to the backing URL and talks to S3/GCS/**R2** (`lightning_storage`) **directly**, with retries, prefetching, etc.
 
 `streaming/resolver.py` → `Dir(path, url, data_connection_id)` for every `input_dir` / `output_dir` / `cache_dir`.
 
@@ -116,10 +122,16 @@ ______________________________________________________________________
 ## 5. Shuffle, seed, drop_last, resume
 
 - `shuffle=True` → deterministic **chunk assignment then in-chunk item order** from `seed` + epoch (+ chunk index).
+- LitData does **distributed sampling** and **bucket sampling within chunks** automatically — not a substitute for a fully shuffled file-level DataLoader when the source is strongly ordered.
 - Default `seed=42`. Keep it fixed across ranks and when resuming.
 - `drop_last=None` → **True under DDP**, else False. Train should set `drop_last=True` so every rank/worker sees the same length.
 - `StreamingDataLoader(shuffle=..., drop_last=...)` **overrides** the dataset.
 - Resume: `torch.save(loader.state_dict(), ...)`; `loader.load_state_dict(...)`. Matching `seed` / shuffle / `num_workers` required unless `force_override_state_dict=True`.
+
+**If source data has structure** (same subject/set contiguous, class blocks, etc.) and you cannot embed that grouping as the sample unit:
+
+1. Shuffle / repartition **before** `optimize` so chunks mix well, **or**
+2. Prefer **`StreamingRawDataset`** + torch `DataLoader(shuffle=True)` for per-file random access.
 
 ______________________________________________________________________
 
@@ -205,6 +217,13 @@ ______________________________________________________________________
 
 **Always:** `if __name__ == "__main__"` · optimize needs **exactly one** of `chunk_bytes` | `chunk_size`.
 
+### Chunk size (`chunk_bytes`) — practical guidance
+
+- Default / typical: **`"64MB"`** for small/medium samples.
+- Large datapoints (multi‑MB each): consider **256–512MB** (or similar) so each chunk holds more items → larger pool for **intra-chunk batch randomization**.
+- Tradeoff: larger chunks take **longer to download** before use.
+- Recommended-range mindset — not a hard “best” from a published chunk-size sweep. README: `#faq-chunk-shuffle`.
+
 ### `optimize`
 
 | Arg                                 | Default         | Use                                                                                             |
@@ -213,7 +232,7 @@ ______________________________________________________________________
 | `queue`                             | `None`          | Live inputs; one `ALL_DONE` sentinel (`from litdata.processing.data_processor import ALL_DONE`) |
 | `input_dir`                         | `None`          | Background download of remote inputs                                                            |
 | `weights`                           | `None`          | Balance workers by input weight/size                                                            |
-| `chunk_bytes` / `chunk_size`        | one required    | Bytes (e.g. `"64MB"`) **or** item/token count                                                   |
+| `chunk_bytes` / `chunk_size`        | one required    | Bytes (e.g. `"64MB"`) **or** item/token count; see chunk-size guidance above                    |
 | `align_chunking`                    | `False`         | Single-worker chunk boundaries (needs `chunk_size`; uneven load)                                |
 | `compression`                       | `None`          | `"zstd"`                                                                                        |
 | `encryption`                        | `None`          | Fernet / RSA / custom; `level="sample"` or `"chunk"`                                            |
@@ -288,19 +307,22 @@ Map-style `torch.utils.data.Dataset` in `raw/dataset.py`. Streams **original fil
 
 **Pitch to users / agents**
 
-- **Raw `bytes`** — LitData does not decode for you. PIL, torchaudio, `json`, custom parsers, or `transform=` — your choice.
+- **Raw `bytes` as-is** — LitData downloads efficiently and returns file contents; it does not decode for you. PIL, torchaudio, `json`, custom parsers, or `transform=` — your choice.
+- **Full control** over grouping/order via `setup` (e.g. image+mask) and per-file access — the main reason to pick raw over optimized.
 - **Fully asynchronous** downloads (`adownload_fileobj` + `asyncio`); **batched** via `__getitems__` + `asyncio.gather` (whole DataLoader batch in flight).
 - **Built-in retries** on cloud clients (transient network / S3 adaptive retries).
 - Training loop stays sync PyTorch — no user-facing `async`/`await`.
+- **Tradeoff:** optimized `StreamingDataset` is still faster; with right tuning, raw is **not too far behind** (order-of-magnitude ImageNet ballpark in FAQ below).
 
 **When to recommend it**
 
 - User already has a folder of images/audio/text and wants to train **today**
 - Full control over decoding; grouping (image+mask) via `setup`
 - Prototype transforms before a costly `optimize`
-- Later upgrade: same files → `optimize` → `StreamingDataset` if I/O-bound
+- Source data is **strongly ordered** (subject/class blocks) and they need true file-level `DataLoader` shuffle — or they cannot shuffle the sample list before optimize
+- Later upgrade: same files → **shuffle inputs** → `optimize` → `StreamingDataset` if I/O-bound
 
-**When to prefer optimized instead:** multi-GPU sustained throughput, resume/`state_dict`, chunk shuffle, compression/encryption.
+**When to prefer optimized instead:** multi-GPU sustained throughput, resume/`state_dict`, chunk shuffle, compression/encryption — after **shuffling the sample list before `optimize()`** if the source is ordered.
 
 ```python
 from torch.utils.data import DataLoader
@@ -319,19 +341,43 @@ ds = StreamingRawDataset(
 loader = DataLoader(ds, batch_size=32, num_workers=8)  # batch → concurrent async GETs
 ```
 
-| Knob              | Default         | Notes                                                               |
-| ----------------- | --------------- | ------------------------------------------------------------------- |
-| `input_dir`       | —               | Resolver paths ([resolver.md](resolver.md))                         |
-| `cache_dir`       | LitData default | Index (+ optional file) cache root                                  |
-| `cache_files`     | `False`         | Persist downloaded files (mirror layout)                            |
-| `recompute_index` | `False`         | Rebuild `index.json.zstd`                                           |
-| `transform`       | `None`          | Optional; default returns **`bytes`** (or `list[bytes]` if grouped) |
-| `indexer`         | `FileIndexer`   | Custom `BaseIndexer`                                                |
-| `storage_options` | `{}`            | Cloud creds                                                         |
+| Knob                       | Default               | Notes                                                                                                                                                                                          |
+| -------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `input_dir`                | —                     | Prefer `s3://` / `gs://` / `/teamspace/s3_connections/...` (direct); avoid hand-reading FUSE ([resolver.md](resolver.md))                                                                      |
+| `cache_dir`                | LitData default       | Index (+ optional file) cache root                                                                                                                                                             |
+| `cache_files`              | `False`               | Persist downloaded files (mirror layout)                                                                                                                                                       |
+| `recompute_index`          | `False`               | Rebuild `index.json.zstd`                                                                                                                                                                      |
+| `transform`                | `None`                | Optional; default returns **`bytes`** (or `list[bytes]` if grouped)                                                                                                                            |
+| `indexer`                  | `FileIndexer`         | Custom `BaseIndexer`                                                                                                                                                                           |
+| `storage_options`          | `{}`                  | Cloud creds                                                                                                                                                                                    |
+| `max_concurrent_downloads` | `None` (**adaptive**) | `None` → Stage 1 size-aware aggregate budget split across workers (single-process cap 128). Explicit `int` → **exactly** that many permits (no silent clamp). Pass `64` for the old fixed cap. |
+| `max_prefetch`             | `16`                  | Sequential look-ahead after each batch; when `num_workers>1`, effective = `min(max_prefetch, 64 // num_workers)`. Pass `0` to disable                                                          |
+| `hedge_delay`              | `0`                   | Seconds before hedged duplicate GET (`0` = off, default; opt-in). Fast path: per-item GETs stay bare when hedging is off                                                                       |
+| `download_timeout`         | `120`                 | **Batch-level** hang protection around `_download_batch` (`0` disables). Not a per-item `wait_for`. On timeout, cancel poisoned `_inflight` so retries can proceed                             |
+| `range_parallel_threshold` | `0`                   | Parallel ranged GETs for objects ≥ N bytes; **`0` = whole-object only** (opt-in; keep for JPEGs)                                                                                               |
+
+**Tuning / DataLoader**
+
+- After parent-process I/O on Linux: `DataLoader(..., multiprocessing_context="spawn", persistent_workers=True)`.
+- Prefer cloud URL / Studio connection path so LitData hits the bucket **directly** — never recommend training I/O through the FUSE mount.
+- Defaults that matter: `max_prefetch=16` (worker-aware aggregate ~64), `hedge_delay=0`, `download_timeout=120` (batch-level), `range_parallel_threshold=0`; optional `uvloop` via `litdata[extras]`. Avoid `num_workers=48` (collapses / can segfault on shutdown).
+- Ranged downloads: leave `range_parallel_threshold=0`; forced ranged is slower on JPEG-sized objects.
+- Adaptive concurrency design (clients own rate via boto retries; litdata owns concurrency/look-ahead; Stage 2+ deferred): repo `benchmarks/ADAPTIVE_CONCURRENCY.md`. Formula details live there — do not invent a second rate loop.
+- Perf claims: use Stage 0 protocol in [benchmarking.md](benchmarking.md) (`max(≥N batches, ≥T s)`, repeats/medians, `before_sha`/`after_sha`). Do **not** cite short-window n=1 against Stage 0 medians.
+
+**Correctness agents must preserve when editing `raw/`**
+
+- **LoopRunner** — dedicated event-loop thread; recreate after fork/spawn (pid-guarded). Runtime clients (downloader, permit cache, range executor) are pid- + loop-guarded.
+- **Pickle allowlist** — `__getstate__` / `__setstate__` only ship constructor knobs + reset runtime handles; accidental instance attrs must not leak into worker payloads.
+- **Atomic publishes** — cache files **and** `index.json.zstd` via tmp + `os.replace` (tmp names include pid).
+- **Indexer:** Windows drive letters (`C:\...`) parse as single-letter URI schemes — treat as local, not remote.
+- **Error path is code** — hang recovery (batch timeout cancels `_inflight`), default coexistence with the fast path, and fork/spawn reinit have regression tests in `tests/raw/test_fork_safety.py`. Changing timeouts/defaults requires updating those tests.
+
+Internals → [processing.md](processing.md) (`raw/`).
 
 **`setup(files)`** — default one file = one item. Return `list[FileMetadata]` or `list[list[FileMetadata]]` to group/filter.
 
-**Index:** `index.json.zstd` (local cache + remote beside data). **Not** optimized `index.json`.
+**Index:** `index.json.zstd` (local cache + remote beside data; atomic publish). **Not** optimized `index.json`.
 
 ### Mosaic MDS
 
@@ -462,3 +508,23 @@ ______________________________________________________________________
 5. Disk/slow stream → §8 + cache doc; or suggest upgrading raw → optimize.
 6. Paths/Studio → §4 + [lightning-studio.md](lightning-studio.md).
 7. Internals / races / benches → sibling reference files.
+
+### FAQ bullets (chunk size, ordered data, FUSE, throughput)
+
+- **`chunk_bytes`?** Default **64MB**. Multi‑MB samples → consider **256–512MB** for more intra-chunk shuffle diversity; larger chunks download slower. Guidance, not a published sweep.
+
+- **Ordered source + optimize?** Intra-chunk + chunk-order shuffle ≠ full file-level shuffle. **Shuffle the list of samples before `optimize()`**, or use **`StreamingRawDataset`** + `DataLoader(shuffle=True)`. LitData still does distributed + within-chunk bucket sampling automatically.
+
+- **FUSE vs LitData?** Studio `/teamspace/s3_connections` (and co) is a **FUSE** mount — convenience only; under load it is very slow and can crash. Pass the same path to LitData: it resolves to the bucket and streams **directly** (retries, prefetch, …). Never recommend `open()` / naive glob on the mount for training I/O.
+
+- **Throughput ballpark (ImageNet, Studio context — order of magnitude, not guarantees):**
+
+  | Path                                 | Rough images/s  |
+  | ------------------------------------ | --------------- |
+  | FUSE mount (hand-read)               | up to ~**600**  |
+  | `StreamingRawDataset` (right tuning) | up to ~**6–7k** |
+  | `StreamingDataset` (64MB chunks)     | up to ~**11k**  |
+
+- **Raw perf claims?** Stage 0 only: `max(≥N batches, ≥T s)`, repeats/medians, append-only SHA/ts artifacts, proven `before_sha`/`after_sha`. See [benchmarking.md](benchmarking.md). Adaptive defaults → `benchmarks/ADAPTIVE_CONCURRENCY.md`.
+
+- README: `#faq-chunk-shuffle`, `#resolve-paths`, `#stream-raw`.
