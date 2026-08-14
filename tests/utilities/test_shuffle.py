@@ -1,15 +1,20 @@
 import itertools
 
+import numpy as np
+
 from litdata.streaming.item_loader import Interval
 from litdata.utilities.env import _DistributedEnv
 from litdata.utilities.shuffle import (
     _aggregate_shared_chunks_per_rank,
     _associate_chunks_and_intervals_to_workers,
+    _associate_whole_chunks_to_workers,
     _find_chunks_per_workers_on_which_to_skip_deletion,
     _get_shared_chunks,
     _group_chunks_by_nodes,
     _intra_node_chunk_shuffle,
     _map_node_worker_rank_to_chunk_indexes_to_not_delete,
+    _window_shuffle,
+    _window_shuffle_chunks_and_intervals,
 )
 
 
@@ -404,3 +409,81 @@ def test_map_node_worker_rank_to_chunk_indexes_to_not_delete():
     chunks_to_workers = {10: [2, 3, 4], 20: [1, 2, 3], 30: [3, 4], 40: [4, 5, 6]}
     workers_to_chunks = _map_node_worker_rank_to_chunk_indexes_to_not_delete(chunks_to_workers)
     assert workers_to_chunks == {1: [20], 2: [10, 20], 3: [10, 20, 30], 4: [10, 30, 40], 5: [40], 6: [40]}
+
+
+def test_window_shuffle_identity_and_locality():
+    rng = np.random.RandomState(0)
+    items = list(range(64))
+    assert _window_shuffle(items, window=1, rng=rng) == items
+    shuffled = _window_shuffle(items, window=8, rng=np.random.RandomState(0))
+    assert sorted(shuffled) == items
+    assert shuffled != items
+    jumps = [abs(shuffled[i] - shuffled[i - 1]) for i in range(1, len(shuffled))]
+    full = list(np.random.RandomState(0).permutation(items))
+    full_jumps = [abs(full[i] - full[i - 1]) for i in range(1, len(full))]
+    assert sum(jumps) / len(jumps) < sum(full_jumps) / len(full_jumps)
+
+
+def test_window_shuffle_chunks_keeps_worker_sets():
+    chunks = [list(range(0, 20)), list(range(20, 40))]
+    intervals = [[[0, 0, 1, 1]] * 20, [[0, 0, 1, 1]] * 20]
+    new_chunks, new_intervals = _window_shuffle_chunks_and_intervals(
+        chunks, intervals, seed=42, current_epoch=1, window=8
+    )
+    assert set(new_chunks[0]) == set(chunks[0])
+    assert set(new_chunks[1]) == set(chunks[1])
+    assert new_chunks[0] != chunks[0]
+    epoch2, _ = _window_shuffle_chunks_and_intervals(chunks, intervals, seed=42, current_epoch=2, window=8)
+    assert epoch2[0] != new_chunks[0]
+    for worker_chunks, worker_intervals in zip(new_chunks, new_intervals):
+        assert len(worker_chunks) == len(worker_intervals)
+
+
+def test_window_shuffle_item_order_is_local():
+    from litdata.streaming.shuffle import WindowShuffle
+
+    shuffler = WindowShuffle(cache=object(), seed=42, drop_last=False, window=8)  # type: ignore[arg-type]
+    order = shuffler(np.arange(64), num_chunks=1, current_epoch=1, chunk_index=0)
+    assert sorted(order) == list(range(64))
+    assert order != list(range(64))
+    jumps = [abs(order[i] - order[i - 1]) for i in range(1, len(order))]
+    full = list(np.random.RandomState(42).permutation(64))
+    full_jumps = [abs(full[i] - full[i - 1]) for i in range(1, len(full))]
+    assert sum(jumps) / len(jumps) < sum(full_jumps) / len(full_jumps)
+
+
+def test_associate_whole_chunks_never_shares():
+    indexes = list(range(8))
+    chunk_intervals = [Interval(0, 0, 50, 50) for _ in range(8)]
+    workers_chunks, workers_intervals = _associate_whole_chunks_to_workers(
+        _DistributedEnv(4, 0, 1),
+        indexes,
+        chunk_intervals,
+        drop_last=True,
+        num_workers=1,
+        batch_size=1,
+    )
+    assert workers_chunks == [[0, 1], [2, 3], [4, 5], [6, 7]]
+    seen: list[int] = []
+    for chunks in workers_chunks:
+        seen.extend(chunks)
+        assert len(chunks) == len(set(chunks))
+    assert sorted(seen) == indexes
+    lengths = [sum(iv[2] - iv[1] for iv in ivs) for ivs in workers_intervals]
+    assert lengths == [100, 100, 100, 100]
+
+
+def test_associate_whole_chunks_large_tail_goes_to_next_worker():
+    indexes = [0, 1, 2, 3]
+    chunk_intervals = [
+        Interval(0, 0, 10, 10),
+        Interval(0, 0, 10, 10),
+        Interval(0, 0, 10, 10),
+        Interval(0, 0, 100, 100),
+    ]
+    workers_chunks, _ = _associate_whole_chunks_to_workers(
+        _DistributedEnv(2, 0, 1), indexes, chunk_intervals, drop_last=False
+    )
+    assert set(workers_chunks[0]).isdisjoint(workers_chunks[1])
+    assert set(workers_chunks[0]) | set(workers_chunks[1]) == set(indexes)
+    assert 3 in workers_chunks[1]

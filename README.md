@@ -737,6 +737,10 @@ Shuffling is **deterministic** and designed for distributed training:
 
 The permutation depends on `seed`, the epoch, and chunk metadata — the same settings always yield the same order (required for resumable `state_dict`).
 
+**Object storage (`s3://`, `gs://`, …)** globally permutes chunks (`FullShuffle`). Random chunk order is cheap once files are already copied into the local cache.
+
+**Vast / NFS / local disk** (POSIX-fast) does **not** globally permute chunks. Each worker gets **whole chunks** in a sequential stripe (files are never split across workers), then shuffles only inside a sliding window (default **16**, `LITDATA_POSIX_SHUFFLE_WINDOW`). The same window is applied **inside** each chunk. The item loader keeps a ~256KiB mmap **view** (`LITDATA_POSIX_PAGE_BYTES`) and splits samples from it, and `posix_fadvise`s the next files in the stripe as it walks. `LITDATA_POSIX_FAST=0` restores global `FullShuffle` (and disables in-place mmap).
+
 ```python
 from litdata import StreamingDataset, StreamingDataLoader
 
@@ -805,7 +809,7 @@ Rough ImageNet order-of-magnitude on a Studio (not hard guarantees; right tuning
 | `seed` | `42` | Shuffle / subsample RNG |
 | `serializers` | built-ins | Custom serialize/deserialize map |
 | `max_cache_size` | `"100GB"` | Evict consumed chunks beyond this size |
-| `max_pre_download` | `2` | Chunks each worker may prefetch (raise for throughput; watch disk) |
+| `max_pre_download` | `2` | Chunks each worker may prefetch (raise for throughput; watch disk / RAM) |
 | `subsample` | `1.0` | Fraction of data (`0.01`) or upsample (`2.5`) |
 | `encryption` | `None` | `FernetEncryption` / `RSAEncryption` / custom |
 | `storage_options` | `{}` | Cloud client options |
@@ -815,6 +819,8 @@ Rough ImageNet order-of-magnitude on a Studio (not hard guarantees; right tuning
 | `transform` | `None` | Callable or list of callables per sample |
 
 Peak disk ≈ `num_workers × max_pre_download × mean_chunk_size`.
+
+On **Vast / NFS / local disk**, POSIX-fast is on by default (`LITDATA_POSIX_FAST=0` to disable). `WILLNEED` prefetch and `num_workers` are capped when they would exceed about half of `MemAvailable`. Idle **hugepages** (common on GPU nodes) do not count as available RAM — drop unused `nr_hugepages` if `MemAvailable` looks tiny next to `MemTotal`.
 
 **`StreamingDataLoader`**
 
@@ -2384,6 +2390,17 @@ Speed to stream Imagenet 1.2M from local disk with ffcv vs LitData:
 | ffcv (os_cache=False) | RAW | 170 GB | 7556 | 8169 |
 | ffcv(os_cache=True) | JPEG 90% | 20 GB | 7653 | 8051 |
 | ffcv(os_cache=False) | JPEG 90% | 20 GB | 8149 | 8607 |
+
+Speed to stream a **synthetic ImageNet-scale set from Vast NFS** (NFSv3 `nconnect=32`, 208-CPU host, ~1 TiB RAM). Dataset: **1.08M** JPEG q95 256×256 (~160 GiB, 64 MiB chunks). `StreamingDataLoader`, batch **256**, `shuffle=True`, `drop_last=True`, decode only unless noted. POSIX-fast mmaps chunks **in place** (no copy into `~/.lightning/chunks`).
+
+| Setup | Workers | Images / sec |
+|---|---|---|
+| Copy into local cache (`LITDATA_POSIX_FAST=0`) | 48 | **16.7k** (2-epoch avg) |
+| POSIX-fast (this default on local/Vast paths) | 48 | **18.2k** |
+| POSIX-fast + README ImageNet augs (crop 224, flip, float32) | 48 | **12.9k** |
+| POSIX-fast, all CPU cores | **208** | **35.8k** |
+
+Notes: 208 workers need enough **MemAvailable**. This host had **928×1 GiB hugepages** reserved and idle (~900 GiB locked); after `nr_hugepages=0`, 208 workers stayed healthy. If `num_workers=os.cpu_count()` would crowd RAM, LitData **clamps** workers (`LITDATA_POSIX_MAX_WORKERS=0` disables) and skips `WILLNEED` prefetch. Real ImageNet JPEG 90% is much smaller (~12 GiB) and usually decodes faster than this q95 noise set.
 
 ### Raw Dataset
 
