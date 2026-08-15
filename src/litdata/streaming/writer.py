@@ -36,6 +36,16 @@ from litdata.utilities.parquet import get_parquet_indexer_cls
 from litdata.utilities.torch_utils import is_local_rank_0, maybe_barrier
 
 
+def _is_worker_index_file(filename: str) -> bool:
+    """True for ``{rank}.index.json`` (dot), not ``index.json`` or ``{node}-index.json``."""
+    return bool(re.fullmatch(rf"\d+\.{re.escape(_INDEX_FILENAME)}", filename))
+
+
+def _is_node_index_file(filename: str) -> bool:
+    """True for ``{node}-index.json`` (hyphen), the per-node merge output."""
+    return bool(re.fullmatch(rf"\d+-{re.escape(_INDEX_FILENAME)}", filename))
+
+
 @dataclass
 class Item:
     index: int
@@ -125,17 +135,16 @@ class BinaryWriter:
 
     @property
     def filled(self) -> bool:
-        """Returns whether the caching phase is done."""
+        """True once the merged ``index.json`` exists for a standalone Cache.
+
+        Optimizer workers must keep writing during ``mode='append'`` even when
+        a previous ``index.json`` is already in the write-through output dir.
+        """
+        if os.getenv("DATA_OPTIMIZER_GLOBAL_RANK") is not None:
+            return False
         if self._is_done:
             return True
-        files = os.listdir(self._cache_dir)
-        index_files = [f for f in files if f.endswith(_INDEX_FILENAME)]
-        worker_env = _WorkerEnv.detect()
-        data_optimiser_num_workers = os.getenv("DATA_OPTIMIZER_NUM_WORKERS", None)
-        if data_optimiser_num_workers is not None:
-            self._is_done = len(index_files) == int(data_optimiser_num_workers)
-        else:
-            self._is_done = len(index_files) == self._distributed_env.world_size * worker_env.world_size
+        self._is_done = os.path.exists(os.path.join(self._cache_dir, _INDEX_FILENAME))
         return self._is_done
 
     @property
@@ -473,7 +482,7 @@ class BinaryWriter:
             if _INDEX_FILENAME in files:
                 return
 
-            index_files = [f for f in files if f.endswith(_INDEX_FILENAME)]
+            index_files = [f for f in files if _is_worker_index_file(f)]
 
             # When using the Data Optimizer, we don't use multi processes.
             is_done = len(index_files) == self._distributed_env.world_size * num_workers
@@ -491,7 +500,10 @@ class BinaryWriter:
 
         """
         files = os.listdir(self._cache_dir)
-        index_files = [f for f in files if f.endswith(_INDEX_FILENAME)]
+        if node_rank is None:
+            index_files = [f for f in files if _is_worker_index_file(f) or _is_node_index_file(f)]
+        else:
+            index_files = [f for f in files if _is_worker_index_file(f)]
 
         chunks_info = []
         config = None

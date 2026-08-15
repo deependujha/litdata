@@ -129,6 +129,19 @@ def test_save_rank_keys_pairs_and_merge_remaps_indexes(tmpdir):
         assert idx["e"] == 4
 
 
+def test_merge_rank_key_files_skips_empty_utf8_when_other_rank_is_int(tmpdir):
+    from litdata.utilities.keys_index import merge_rank_key_files
+
+    save_rank_keys(os.path.join(tmpdir, "0.keys.parquet"), [])
+    save_rank_keys(os.path.join(tmpdir, "1.keys.parquet"), [(0, 3), (1, 7)])
+    merged = merge_rank_key_files(str(tmpdir))
+    assert merged is not None
+    with KeyIndex(merged) as idx:
+        assert len(idx) == 2
+        assert idx[3] == 0
+        assert idx[7] == 1
+
+
 def test_merge_rank_key_files_multi_node_then_concatenate(tmpdir):
     """Simulate last-node merge: each node writes ``{rank}-keys.parquet``, then concatenate."""
     from litdata.utilities.keys_index import concatenate_key_files, merge_rank_key_files
@@ -322,6 +335,7 @@ def test_build_keys_index_backfills_sidecar(tmpdir):
         chunk_size=4,
         num_workers=2,
         reorder_files=False,
+        keep_data_ordered=True,
     )
     assert not os.path.isfile(shard_path(out, 0))
 
