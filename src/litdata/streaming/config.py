@@ -14,9 +14,10 @@
 import contextlib
 import logging
 import os
+import threading
 from collections import defaultdict
 from contextlib import suppress
-from time import sleep, time
+from time import time
 from typing import Any, Optional
 
 from filelock import FileLock, Timeout
@@ -92,10 +93,15 @@ class ChunksConfig:
         self._length = self._intervals[-1][-1] if len(self._intervals) > 0 else 0
         self._downloader = None
 
+        # In-process "file is visible" Events, set after atomic publish (download or decompress).
+        self._file_published: dict[str, threading.Event] = {}
+        self._file_published_lock = threading.Lock()
+
         if remote_dir:
             self._downloader = get_downloader(
                 remote_dir, cache_dir, self._chunks, self._storage_options, self._session_options
             )
+            self._downloader._on_file_published = self.notify_file_published
 
         self._compressor_name = self._config["compression"]
         self._compressor: Compressor | None = None
@@ -256,6 +262,28 @@ class ChunksConfig:
 
         return self._downloader.download_chunk_bytes_from_index(chunk_index, offset, length)
 
+    def notify_file_published(self, local_filepath: str) -> None:
+        """Mark ``local_filepath`` as atomically published and, if it is a readable chunk, signal ready."""
+        path = os.path.abspath(local_filepath)
+        with self._file_published_lock:
+            event = self._file_published.get(path)
+            if event is None:
+                event = threading.Event()
+                self._file_published[path] = event
+            event.set()
+
+    def wait_file_published(self, local_filepath: str, timeout: float) -> bool:
+        """Wait for an in-process publish Event; fall back to ``exists`` for other workers."""
+        path = os.path.abspath(local_filepath)
+        with self._file_published_lock:
+            event = self._file_published.get(path)
+            if event is None:
+                event = threading.Event()
+                self._file_published[path] = event
+        if event.wait(timeout=timeout):
+            return True
+        return os.path.exists(path)
+
     def _remove_compressed_source(self, local_chunkpath: str, target_local_chunkpath: str) -> None:
         """Drop the compressed download once the decompressed chunk is on disk."""
         if local_chunkpath == target_local_chunkpath:
@@ -273,13 +301,12 @@ class ChunksConfig:
             self._remove_compressed_source(local_chunkpath, target_local_chunkpath)
             return
 
-        # Wait until either the decompressed target appears (another worker finished) or the
-        # compressed source exists. Cloud downloaders publish the compressed path atomically, so
-        # existence of that path means the download is complete — do NOT use chunk_size (item
-        # count) as a byte threshold.
+        # Wait until the downloader publishes the compressed file, or another worker
+        # publishes the decompressed target. Cross-process downloads still fall back to exists.
         start_time = time()
-        while not os.path.exists(local_chunkpath) and not os.path.exists(target_local_chunkpath):
-            sleep(0.1)
+        while not os.path.exists(target_local_chunkpath) and not os.path.exists(local_chunkpath):
+            self.wait_file_published(local_chunkpath, 0.05)
+            self.wait_file_published(target_local_chunkpath, 0.0)
             if (time() - start_time) > _MAX_WAIT_TIME:
                 raise ChunkWaitTimeoutError(local_chunkpath, time() - start_time)
 
@@ -307,6 +334,7 @@ class ChunksConfig:
                             f"({os.stat(tmp_path).st_size} < {expected_bytes})."
                         )
                     os.replace(tmp_path, target_local_chunkpath)
+                    self.notify_file_published(target_local_chunkpath)
                 except Exception:
                     with contextlib.suppress(FileNotFoundError, PermissionError):
                         os.remove(tmp_path)
@@ -463,6 +491,20 @@ class ChunksConfig:
             storage_options,
             session_options,
         )
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        # threading.Lock / Event are not picklable (DataLoader spawn / deepcopy).
+        state["_file_published"] = {}
+        state["_file_published_lock"] = None
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._file_published = {}
+        self._file_published_lock = threading.Lock()
+        if self._downloader is not None:
+            self._downloader._on_file_published = self.notify_file_published
 
     def __len__(self) -> int:
         return self._length

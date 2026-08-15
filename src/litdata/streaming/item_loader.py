@@ -214,6 +214,7 @@ class BaseItemLoader(ABC):
         # Fixed size-header layout: one little-endian uint32 per leaf.
         # Keep a format string (pickle-friendly) rather than a ``struct.Struct`` instance.
         self._sizes_fmt = "<" + "I" * len(self._data_format) if self._data_format else None
+        self._sizes_struct = struct.Struct(self._sizes_fmt) if self._sizes_fmt else None
 
     def force_download(self, chunk_index: int) -> None:
         force_download_queue = getattr(self, "_force_download_queue", None)
@@ -291,18 +292,24 @@ class BaseItemLoader(ABC):
                 return
 
             if chunk_ready_provider is not None:
+                remaining = max_wait - (time() - start_time)
+                if remaining <= 0:
+                    raise ChunkWaitTimeoutError(chunk_filepath, time() - start_time)
                 event = chunk_ready_provider(chunk_index)
-                signaled = event.wait(timeout=0.1)
-                # Stale signal: chunk was ready once, then deleted / not yet re-published.
+                # Wait for prefetch to publish. Force-download is a last resort after
+                # ``_FORCE_DOWNLOAD_TIME`` (default 30s) — not on the first wait.
+                signaled = event.wait(timeout=min(1.0, remaining))
                 if signaled and not (
                     os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size >= filesize_bytes
                 ):
+                    # Stale signal after delete (clear_chunk_ready may have been skipped).
+                    # Chunk-ready is set only after decompress/finalize, so this is safe.
                     event.clear()
-                    sleep(0.1)
+                    sleep(0.05)
             else:
                 sleep(0.1)
 
-            # Always attempt force-download after the grace period (no-op without a queue).
+            # Retry force-download after the grace period if the first request was deferred.
             # Tests override ``force_download`` to assert this path is reached.
             if not requested_force_download and (time() - start_time) > _FORCE_DOWNLOAD_TIME:
                 if _DEBUG:
@@ -319,6 +326,8 @@ class BaseItemLoader(ABC):
         state["_chunk_ready_provider"] = None
         state["_force_download_queue"] = None
         state["_prefetch_error_provider"] = None
+        # ``struct.Struct`` is not picklable; rebuild from ``_sizes_fmt`` after unpickle.
+        state["_sizes_struct"] = None
         return state
 
     @functools.lru_cache(maxsize=128)
@@ -435,7 +444,10 @@ class PyTreeLoader(BaseItemLoader):
         return intervals
 
     def pre_load_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
-        if self._posix_fast and self._posix_willneed:
+        # Called from PrepareChunksThread. Only advise the page cache — do not
+        # mutate mmap state here (the reader thread owns ``_mapped``).
+        del chunk_index
+        if os.path.isfile(chunk_filepath) and (self._posix_willneed or not self._posix_fast):
             advise_willneed(chunk_filepath)
 
     def warm_posix_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
@@ -577,7 +589,7 @@ class PyTreeLoader(BaseItemLoader):
         # We want to read the `offset_start` and `offset_end` for the item we want to load
         # 2 uint32 (4 bytes each) => 8 bytes; are read to get the offset_start and offset_end
         pair = fp.read(8)
-        begin, end = np.frombuffer(pair, np.uint32)
+        begin, end = struct.unpack("<II", pair)
 
         fp.seek(begin)  # move the file pointer to the offset_start where the item starts
         return fp.read(end - begin)  # read the item
@@ -648,11 +660,16 @@ class PyTreeLoader(BaseItemLoader):
     def deserialize(self, raw_item_data: bytes | memoryview) -> "PyTree":
         """Deserialize the raw bytes into their python equivalent."""
         idx = self._shift_idx
-        sizes = struct.unpack_from(self._sizes_fmt, raw_item_data, 0) if self._sizes_fmt is not None else ()
-        data = []
-        for size, serializer in zip(sizes, self._serializers_list):
-            data_bytes = raw_item_data[idx : idx + size]
-            data.append(serializer.deserialize(data_bytes))
+        sizes_struct = getattr(self, "_sizes_struct", None)
+        if sizes_struct is not None:
+            sizes = sizes_struct.unpack_from(raw_item_data, 0)
+        elif self._sizes_fmt is not None:
+            sizes = struct.unpack_from(self._sizes_fmt, raw_item_data, 0)
+        else:
+            sizes = ()
+        data = [None] * len(sizes)
+        for i, (size, serializer) in enumerate(zip(sizes, self._serializers_list)):
+            data[i] = serializer.deserialize(raw_item_data[idx : idx + size])
             idx += size
         if self._unflatten is not None:
             return self._unflatten(data)
@@ -738,8 +755,9 @@ class PyTreeLoader(BaseItemLoader):
         self._mmap = None
         self._open_handle = None
         for idx in list(self._mapped):
-            mm, _, _ = self._mapped.pop(idx)
-            self._close_mapping(idx, mm)
+            cached = self._mapped.pop(idx, None)
+            if cached is not None:
+                self._close_mapping(idx, cached[0])
 
     def close(self, chunk_index: int) -> None:
         """Close the open file handle / memory-map for the current chunk."""
@@ -802,7 +820,7 @@ class PyTreeLoader(BaseItemLoader):
         header_len = 4 * n
         out = bytearray(header_len + body_len)
         if n:
-            out[0:header_len] = np.asarray(sizes, dtype=np.uint32).tobytes()
+            out[0:header_len] = struct.pack("<" + "I" * n, *sizes)
         cursor = header_len
         for chunk, size in zip(data, sizes):
             out[cursor : cursor + size] = chunk
@@ -824,6 +842,7 @@ class PyTreeLoader(BaseItemLoader):
         state["_mmap_view"] = None
         # Compiled unflatten closures aren't picklable; rebuild after unpickle.
         state["_unflatten"] = None
+        state["_sizes_struct"] = None
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
@@ -842,6 +861,8 @@ class PyTreeLoader(BaseItemLoader):
         data_spec = getattr(self, "_data_spec", None)
         if isinstance(data_spec, TreeSpec):
             self._unflatten = _compile_treespec_unflatten(data_spec)
+        sizes_fmt = getattr(self, "_sizes_fmt", None)
+        self._sizes_struct = struct.Struct(sizes_fmt) if sizes_fmt else None
 
 
 class TokensLoader(BaseItemLoader):

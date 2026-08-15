@@ -16,7 +16,38 @@ from litdata.streaming.dataset import StreamingDataset
 from litdata.streaming.downloader import S3Downloader
 from litdata.streaming.item_loader import PyTreeLoader
 from litdata.streaming.reader import _DEFAULT_TIMEOUT, PrepareChunksThread
+from litdata.streaming.sampler import ChunkedIndex
 from litdata.utilities.env import _DistributedEnv
+
+
+def test_run_loop_downloads_numpy_int64_chunk_indexes(monkeypatch, tmpdir):
+    """Shuffle queues numpy.int64; the prepare loop must not drop them as non-ints."""
+    import numpy as np
+
+    cache_dir = str(tmpdir / "cache")
+    os.makedirs(cache_dir)
+    config = MagicMock(spec=ChunksConfig)
+    config.num_bytes = 1024
+    config._cache_dir = cache_dir
+    config._remote_dir = "s3://bucket"
+    config.download_chunk_from_index = MagicMock()
+    item_loader = MagicMock()
+    env = _DistributedEnv(1, 0, 1)
+
+    thread = PrepareChunksThread(config, item_loader, env, max_cache_size=10_000, max_pre_download=4)
+    seen: list[list[int]] = []
+
+    def fake_download(chunk_indexes: list[int]) -> None:
+        seen.append(list(chunk_indexes))
+        thread._force_stop_event.set()
+
+    monkeypatch.setattr(thread, "_download_chunk_indexes", fake_download)
+    monkeypatch.setattr(thread, "_async_prefetch", lambda: False)
+    thread.download([np.int64(17), np.int64(18)])
+    thread.run()
+
+    assert seen, "prepare thread dropped numpy.int64 chunk indexes"
+    assert [int(x) for x in seen[0]] == [17]
 
 
 def test_prefetch_side_polls_are_nonblocking_when_download_work_available(monkeypatch, tmpdir):
@@ -159,6 +190,36 @@ def test_item_loader_clears_stale_ready_event(tmpdir):
     item = loader.load_item_from_chunk(2, 1, chunk_filepath, begin, filesize)
     assert item == 2
     # The wait loop may clear again after restore on a slow FS; the load is the contract.
+
+
+def test_atomic_publish_sets_file_and_chunk_ready_events(tmpdir):
+    """Downloader os.replace should set in-process Events instead of requiring FS polls."""
+    cache = Cache(str(tmpdir / "src"), chunk_size=2)
+    for i in range(2):
+        cache[i] = i
+    cache.done()
+    cache.merge()
+
+    reader = cache._reader
+    reader._try_load_config()
+    config = reader.config
+    chunk_filepath, _, _ = config[ChunkedIndex(0, chunk_index=0)]
+
+    dest = os.path.join(str(tmpdir / "dest"), os.path.basename(chunk_filepath))
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    tmp = dest + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(b"ready")
+
+    from litdata.streaming.downloader import LocalDownloader
+
+    dl = LocalDownloader(str(tmpdir / "src"), str(tmpdir / "dest"), [])
+    dl._on_file_published = config.notify_file_published
+    # Simulate the last step of a download: atomic publish of tmp → dest.
+    dl._publish_file(tmp, dest)
+
+    assert os.path.exists(dest)
+    assert config.wait_file_published(dest, timeout=0.0)
 
 
 def test_s3_downloader_does_not_publish_partial_final_path(monkeypatch, tmpdir):

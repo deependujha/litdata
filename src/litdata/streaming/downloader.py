@@ -18,6 +18,7 @@ import shutil
 import tempfile
 import threading
 from abc import ABC
+from collections.abc import Callable
 from contextlib import suppress
 from time import time
 from typing import TYPE_CHECKING, Any, cast
@@ -85,7 +86,7 @@ async def _obstore_adownload_file(downloader: "Downloader", store: Any, key: str
         os.makedirs(os.path.dirname(local_filepath) or ".", exist_ok=True)
         resp = await obs.get_async(store, key)
         await _obstore_astream_resp_to_tmp(tmp_path, resp)
-        downloader._atomic_replace(tmp_path, local_filepath)
+        downloader._publish_file(tmp_path, local_filepath)
     except Exception:
         with suppress(FileNotFoundError, PermissionError):
             os.remove(tmp_path)
@@ -264,12 +265,17 @@ class Downloader(ABC):
         self._cache_dir = cache_dir
         self._chunks = chunks
         self._storage_options = storage_options or {}
+        # Set by ChunksConfig: called after an atomic publish so waiters can Event.wait
+        # instead of polling the filesystem.
+        self._on_file_published: Callable[[str], None] | None = None
 
     def __getstate__(self) -> dict[str, Any]:
         # Spawn workers must not inherit a live obstore S3Store / tokio runtime.
         state = self.__dict__.copy()
         state.pop("_store", None)
         state.pop("_store_pid", None)
+        # Bound method / lock-holding callback is process-local; rebound in ChunksConfig.__setstate__.
+        state.pop("_on_file_published", None)
         return state
 
     def _increment_local_lock(self, chunkpath: str, chunk_index: int) -> None:
@@ -294,6 +300,7 @@ class Downloader(ABC):
         remote_chunkpath = os.path.join(self._remote_dir, chunk_filename)
 
         self.download_file(remote_chunkpath, local_chunkpath)
+        self._notify_published(local_chunkpath)
 
         emit_trace("download", "E", CAT_DOWNLOAD, chunk=chunk_index)
 
@@ -315,7 +322,24 @@ class Downloader(ABC):
     @staticmethod
     def _atomic_replace(tmp_path: str, local_filepath: str) -> None:
         """Publish a completed download by atomically replacing the destination path."""
-        os.replace(tmp_path, local_filepath)
+        try:
+            os.replace(tmp_path, local_filepath)
+        except FileNotFoundError:
+            # Same-pid gather of a duplicate index, or another worker already published.
+            if os.path.exists(local_filepath):
+                return
+            raise
+
+    def _notify_published(self, local_filepath: str) -> None:
+        """Signal that ``local_filepath`` is visible (atomic rename finished, or already present)."""
+        callback = getattr(self, "_on_file_published", None)
+        if callback is not None:
+            callback(local_filepath)
+
+    def _publish_file(self, tmp_path: str, local_filepath: str) -> None:
+        """Atomically publish ``tmp_path`` and notify in-process waiters."""
+        self._atomic_replace(tmp_path, local_filepath)
+        self._notify_published(local_filepath)
 
     def download_bytes(self, remote_chunkpath: str, offset: int, length: int, local_chunkpath: str) -> bytes:
         """Download a specific range of bytes from the remote file.
@@ -353,6 +377,7 @@ class Downloader(ABC):
         :meth:`adownload_fileobj` + an atomic write.
         """
         if os.path.exists(local_filepath):
+            self._notify_published(local_filepath)
             return
         data = await self.adownload_fileobj(remote_filepath)
         if data is None:
@@ -365,7 +390,7 @@ class Downloader(ABC):
             os.makedirs(os.path.dirname(local_filepath) or ".", exist_ok=True)
             with open(tmp_path, "wb") as f:
                 f.write(data)
-            self._atomic_replace(tmp_path, local_filepath)
+            self._publish_file(tmp_path, local_filepath)
         except Exception:
             with contextlib.suppress(FileNotFoundError, PermissionError):
                 os.remove(tmp_path)
@@ -422,7 +447,7 @@ class S3Downloader(Downloader):
                         tmp_path,
                         Config=TransferConfig(use_threads=False),
                     )
-                self._atomic_replace(tmp_path, local_filepath)
+                self._publish_file(tmp_path, local_filepath)
             except Exception:
                 with suppress(FileNotFoundError, PermissionError):
                     os.remove(tmp_path)
@@ -531,7 +556,7 @@ class R2Downloader(Downloader):
                         ExtraArgs=extra_args,
                         Config=TransferConfig(use_threads=False),
                     )
-                    self._atomic_replace(tmp_path, local_filepath)
+                    self._publish_file(tmp_path, local_filepath)
                 except Exception:
                     with suppress(FileNotFoundError, PermissionError):
                         os.remove(tmp_path)
@@ -654,7 +679,7 @@ class GCPDownloader(Downloader):
             tmp_path = self._temp_download_path(local_filepath)
             try:
                 blob.download_to_filename(tmp_path)
-                self._atomic_replace(tmp_path, local_filepath)
+                self._publish_file(tmp_path, local_filepath)
             except Exception:
                 with suppress(FileNotFoundError, PermissionError):
                     os.remove(tmp_path)
@@ -772,7 +797,7 @@ class AzureDownloader(Downloader):
                 with open(tmp_path, "wb") as download_file:
                     blob_data = blob_client.download_blob()
                     blob_data.readinto(download_file)
-                self._atomic_replace(tmp_path, local_filepath)
+                self._publish_file(tmp_path, local_filepath)
             except Exception:
                 with suppress(FileNotFoundError, PermissionError):
                     os.remove(tmp_path)
@@ -848,6 +873,7 @@ class LocalDownloader(Downloader):
     async def adownload_file(self, remote_filepath: str, local_filepath: str) -> None:
         """Copy a local file into the cache path."""
         if os.path.exists(local_filepath):
+            self._notify_published(local_filepath)
             return
         self.download_file(remote_filepath, local_filepath)
 
@@ -866,13 +892,15 @@ class LocalDownloader(Downloader):
                 # make an atomic operation to be safe
                 temp_file_path = local_filepath + ".tmp"
                 shutil.copy(remote_filepath, temp_file_path)
-                os.rename(temp_file_path, local_filepath)
+                self._publish_file(temp_file_path, local_filepath)
         # FileLock leaves the lock path behind; remove it after release when we held it.
         # Delete only after the critical section so other waiters do not race a new inode
         # while we still expected exclusive access.
         if lock_acquired:
             with contextlib.suppress(Exception):
                 os.remove(lock_path)
+        if os.path.exists(local_filepath):
+            self._notify_published(local_filepath)
 
 
 class HFDownloader(Downloader):
@@ -925,7 +953,7 @@ class HFDownloader(Downloader):
             if downloaded_path != local_filepath and os.path.exists(downloaded_path):
                 temp_file_path = local_filepath + ".tmp"
                 shutil.copyfile(downloaded_path, temp_file_path)
-                os.rename(temp_file_path, local_filepath)
+                self._publish_file(temp_file_path, local_filepath)
 
 
 class LocalDownloaderWithCache(LocalDownloader):

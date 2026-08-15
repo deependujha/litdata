@@ -1558,6 +1558,8 @@ class FloatSerializer(NumericSerializer, Serializer):
 class BooleanSerializer(Serializer):
     """The BooleanSerializer serializes and deserializes boolean values to and from bytes."""
 
+    size = 1
+
     def serialize(self, item: bool) -> tuple[bytes, str | None]:
         """Serialize a boolean value to bytes.
 
@@ -1578,7 +1580,7 @@ class BooleanSerializer(Serializer):
         Returns:
             The deserialized boolean value
         """
-        return bool(np.frombuffer(data, dtype=np.bool_)[0])
+        return data[0] != 0
 
     def can_serialize(self, item: Any) -> bool:
         """Check if the item can be serialized by this serializer.

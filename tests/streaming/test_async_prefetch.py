@@ -25,6 +25,7 @@ from litdata.streaming.async_prefetch import (
     adownload_chunk_indexes,
     apply_async_pre_download_floor,
     async_chunk_prefetch_enabled,
+    async_download_concurrency,
     async_prefetch_min_pre_download,
     download_chunk_indexes_concurrently,
     downloader_supports_adownload,
@@ -156,6 +157,16 @@ def test_adownload_chunk_indexes_overlap_latency(tmpdir):
         assert os.path.exists(os.path.join(cache_dir, chunks[idx]["filename"]))
 
 
+def test_async_download_concurrency_caps_gather(monkeypatch):
+    monkeypatch.delenv("LITDATA_ASYNC_DOWNLOAD_CONCURRENCY", raising=False)
+    assert async_download_concurrency(3) == 3
+    assert async_download_concurrency(32) == 8
+    monkeypatch.setenv("LITDATA_ASYNC_DOWNLOAD_CONCURRENCY", "2")
+    assert async_download_concurrency(32) == 2
+    monkeypatch.setenv("LITDATA_ASYNC_DOWNLOAD_CONCURRENCY", "1")
+    assert async_download_concurrency(8) == 1
+
+
 def test_download_chunk_indexes_concurrently_single_uses_sync(tmpdir, monkeypatch):
     monkeypatch.setenv("LITDATA_ASYNC_CHUNK_PREFETCH", "1")
     cache_dir = _seed_local_chunks(tmpdir, n_chunks=2, chunk_size=4)
@@ -193,11 +204,30 @@ def test_prepare_chunks_thread_batches_when_async_enabled(tmpdir, monkeypatch):
 
     monkeypatch.setattr(thread, "_download_chunk_indexes", _capture)
     thread.download([0, 1, 2])
-    thread._to_download_queue.put("END")
+    thread.stop()
     thread.run()
     assert called
     # First batch should include multiple indexes when async prefetch is on.
     assert len(called[0]) >= 2
+
+
+def test_should_start_download_refills_in_gather_batches(tmpdir, monkeypatch):
+    monkeypatch.setenv("LITDATA_ASYNC_CHUNK_PREFETCH", "1")
+    monkeypatch.setenv("LITDATA_ASYNC_MIN_PRE_DOWNLOAD", "0")
+    cache_dir = _seed_local_chunks(tmpdir, n_chunks=4, chunk_size=2)
+    cfg = ChunksConfig.load(cache_dir, _get_serializers(None), None, PyTreeLoader())
+    assert cfg is not None
+    cfg._remote_dir = "r2://bucket/data"
+    thread = PrepareChunksThread(cfg, MagicMock(), _DistributedEnv(1, 0, 1), max_pre_download=8)
+    assert thread._should_start_download(over_budget=False) is True
+    thread._pre_download_counter = 1
+    assert thread._should_start_download(over_budget=False) is True
+    thread._pre_download_counter = 7
+    assert thread._should_start_download(over_budget=False) is True
+    thread._pre_download_counter = 8
+    assert thread._should_start_download(over_budget=False) is False
+    thread._pre_download_counter = 4
+    assert thread._should_start_download(over_budget=False) is True
 
 
 def test_no_use_asyncio_on_streaming_dataloader():

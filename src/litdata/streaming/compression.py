@@ -13,7 +13,7 @@
 
 import shutil
 from abc import ABC, abstractmethod
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from litdata.constants import _PYTHON_GREATER_EQUAL_3_14, _ZSTD_AVAILABLE
 from litdata.debugger import CAT_DECOMPRESS, trace_span
@@ -54,27 +54,32 @@ class ZSTDCompressor(Compressor):
             raise ModuleNotFoundError(str(_ZSTD_AVAILABLE))
         self.level = level
         self.extension = "zstd"
+        self._zstd: Any | None = None
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        state["_zstd"] = None
+        return state
+
+    def _zstd_mod(self) -> Any:
+        if self._zstd is None:
+            if _PYTHON_GREATER_EQUAL_3_14:
+                from compression import zstd as mod
+            else:
+                import zstd as mod
+            self._zstd = mod
+        return self._zstd
 
     @property
     def name(self) -> str:
         return f"{self.extension}:{self.level}"
 
     def compress(self, data: bytes) -> bytes:
-        if _PYTHON_GREATER_EQUAL_3_14:
-            from compression import zstd
-        else:
-            import zstd
-
-        return zstd.compress(data, self.level)
+        return self._zstd_mod().compress(data, self.level)
 
     def decompress(self, data: bytes) -> bytes:
-        if _PYTHON_GREATER_EQUAL_3_14:
-            from compression import zstd
-        else:
-            import zstd
-
         with trace_span("decompress", CAT_DECOMPRESS):
-            return zstd.decompress(data)
+            return self._zstd_mod().decompress(data)
 
     def decompress_file(self, src: str, dst: str) -> None:
         if _PYTHON_GREATER_EQUAL_3_14:

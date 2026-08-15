@@ -15,6 +15,7 @@ import copy
 import json
 import os
 import re
+import struct
 import warnings
 from dataclasses import dataclass
 from multiprocessing import Queue
@@ -28,7 +29,7 @@ from litdata.processing.utilities import get_worker_rank
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
 from litdata.streaming.serializers import Serializer, _get_serializers
-from litdata.utilities._pytree import PyTree, tree_flatten, treespec_dumps
+from litdata.utilities._pytree import PyTree, tree_flatten, tree_leaves, treespec_dumps
 from litdata.utilities.encryption import Encryption, EncryptionLevel
 from litdata.utilities.env import _DistributedEnv, _WorkerEnv
 from litdata.utilities.format import _convert_bytes_to_int, _human_readable_bytes
@@ -99,6 +100,9 @@ class BinaryWriter:
         self._serializers: dict[str, Serializer] = _get_serializers(serializers)
         self._serializers_extra: dict[str, Serializer] = {}
         self._format_serializers: list[Serializer] | None = None
+        self._format_fixed_sizes: list[int | None] | None = None
+        self._fixed_header: bytes | None = None
+        self._fixed_body_len: int = 0
         self._chunk_size = chunk_size
         self._chunk_bytes = _convert_bytes_to_int(chunk_bytes) if isinstance(chunk_bytes, str) else chunk_bytes
         self._compression = compression
@@ -174,14 +178,13 @@ class BinaryWriter:
 
     def serialize(self, items: Any) -> tuple[bytes, int | None]:
         """Serialize a dictionary into its binary format."""
-        # Flatten the items provided by the users
-        flattened, data_spec = tree_flatten(items)
-
-        # Collect the sizes and associated bytes for each item
+        # Flatten the items provided by the users. After the first sample the treespec is cached,
+        # so later writes only walk leaves (same order as ``tree_flatten``).
         sizes: list[int] = []
         data: list[bytes] = []
 
         if self._data_format is None:
+            flattened, data_spec = tree_flatten(items)
             data_format: list[str] = []
             for item in flattened:
                 data_format.append(self._serialize(item, sizes, data))
@@ -196,10 +199,45 @@ class BinaryWriter:
             self._data_format = data_format
             self._data_spec = data_spec
             self._format_serializers = [self._serializers_extra[name] for name in data_format]
+            self._format_fixed_sizes = [getattr(serializer, "size", None) for serializer in self._format_serializers]
+            self._cache_fixed_item_layout()
+        elif self._fixed_header is not None:
+            return self._serialize_fixed_leaves(items)
         else:
+            flattened = tree_leaves(items)
             self._serialize_with_data_format(flattened, sizes, data, self._data_format)
 
         return self._item_loader.encode_data(data, sizes, flattened)
+
+    def _cache_fixed_item_layout(self) -> None:
+        """If every leaf has a constant byte size, cache the size header for every later sample."""
+        sizes = self._format_fixed_sizes
+        if not sizes or any(size is None for size in sizes):
+            self._fixed_header = None
+            self._fixed_body_len = 0
+            return
+        typed = [int(size) for size in sizes if size is not None]
+        self._fixed_header = struct.pack("<" + "I" * len(typed), *typed)
+        self._fixed_body_len = sum(typed)
+
+    def _serialize_fixed_leaves(self, items: Any) -> tuple[bytes, int | None]:
+        flattened = tree_leaves(items)
+        header = self._fixed_header
+        serializers = self._format_serializers
+        sizes = self._format_fixed_sizes
+        assert header is not None
+        assert serializers is not None
+        assert sizes is not None
+        out = bytearray(len(header) + self._fixed_body_len)
+        out[0 : len(header)] = header
+        cursor = len(header)
+        for element, serializer, size in zip(flattened, serializers, sizes):
+            blob, _ = serializer.serialize(element)
+            assert size is not None
+            end = cursor + size
+            out[cursor:end] = blob
+            cursor = end
+        return bytes(out), None
 
     def _serialize(self, item: Any, sizes: list[int], data: list[bytes]) -> str:
         """Serialize a given item and append its size and bytes to the sizes and data array."""
@@ -223,11 +261,17 @@ class BinaryWriter:
         if serializers is None:
             serializers = [self._serializers_extra[name] for name in data_format]
             self._format_serializers = serializers
-        for element, serializer in zip(item, serializers):
+            self._format_fixed_sizes = [getattr(serializer, "size", None) for serializer in serializers]
+            self._cache_fixed_item_layout()
+        fixed_sizes = self._format_fixed_sizes
+        if fixed_sizes is None:
+            fixed_sizes = [getattr(serializer, "size", None) for serializer in serializers]
+            self._format_fixed_sizes = fixed_sizes
+            self._cache_fixed_item_layout()
+        for element, serializer, fixed in zip(item, serializers, fixed_sizes):
             serialized_item, _ = serializer.serialize(element)
             data.append(serialized_item)
-            size = getattr(serializer, "size", None)
-            sizes.append(size if size is not None else len(serialized_item))
+            sizes.append(fixed if fixed is not None else len(serialized_item))
 
     def _create_chunk(self, filename: str, on_done: bool = False) -> bytes:
         """Creates a binary chunk file from serialized items."""
