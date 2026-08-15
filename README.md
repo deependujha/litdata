@@ -7,15 +7,31 @@
 &nbsp;
 &nbsp;
 
-<pre>
-Transform                              Optimize / Stream
-  
-✅ Parallelize data processing       ✅ Stream raw files with no prep
-✅ Create vector embeddings          ✅ Stream large cloud datasets          
-✅ Run distributed inference         ✅ Accelerate training by 20x           
-✅ Scrape websites at scale          ✅ Pause and resume data streaming      
-                                     ✅ Use remote data without local loading
-</pre>
+<table>
+<tr>
+<td valign="top" align="left">
+
+**Transform**
+
+✅ Parallelize data processing  
+✅ Create vector embeddings  
+✅ Run distributed inference  
+✅ Scrape websites at scale
+
+</td>
+<td valign="top" align="left">
+
+**Optimize / Stream**
+
+✅ Stream raw files with no prep  
+✅ Stream large cloud datasets  
+✅ Accelerate training by 20x  
+✅ Pause and resume data streaming  
+✅ Use remote data without local loading
+
+</td>
+</tr>
+</table>
 
 ---
 
@@ -29,11 +45,14 @@ Transform                              Optimize / Stream
   <a href="#quick-start">Quick start</a> •
   <a href="#speed-up-model-training">Optimize data</a> •
   <a href="#transform-datasets">Transform data</a> •
+  <a href="#modality">Modality</a> •
   <a href="#key-features">Features</a> •
   <a href="#stream-raw">Stream raw files</a> •
   <a href="#resolve-paths">Paths & cloud URLs</a> •
   <a href="#benchmarks">Benchmarks</a> •
   <a href="#start-from-a-template">Templates</a> •
+  <a href="#used-by">Used by</a> •
+  <a href="#skills">Skills</a> •
   <a href="#community">Community</a>
 </p>
 
@@ -92,7 +111,7 @@ On Linux/macOS, `[extras]` includes optional `uvloop` for a faster asyncio event
 <details>
   <summary>AI agent skill (Cursor, Claude Code, …)</summary>
 
-Install the LitData expert skill so coding agents know the full API, path resolver, optimize/stream recipes, and internals:
+Install the LitData expert skill so coding agents know the full API, path resolver, optimize/stream recipes, and internals. Full file map → [Skills](#skills).
 
 ```bash
 npx skills add Lightning-AI/litData
@@ -151,24 +170,19 @@ Transform raw data into optimized chunks for maximum streaming speed.
 This step formats the dataset for fast loading by writing data in an efficient chunked binary format.
 
 ```python
-import io
 import numpy as np
-from PIL import Image
 import litdata as ld
 
 def random_images(index):
-    # Replace with your actual image loading (e.g. Image.open("photo.jpg")).
-    # Prefer JPEG: return a JpegImageFile, or re-encode at quality≈95. Plain
-    # Image.fromarray(...) stores uncompressed PIL RAW and can be 10×+ larger.
-    img = Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8))
-    buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=95)
-    buf.seek(0)
-    jpeg_image = Image.open(buf)  # JpegImageFile → compressed bytes in the chunk
-    fake_labels = np.random.randint(10)
-
-    # Keys/types must stay stable across samples; list lengths/types fixed
-    return {"index": index, "image": jpeg_image, "class": fake_labels}
+    # Replace with your files: Image(path="photo.jpg") or Image(bytes=...).
+    # Wrappers pick the serializer (a caption string is not an image).
+    # quality/format encode JPEG — not uncompressed PIL RAW.
+    array = np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)
+    return {
+        "index": index,
+        "image": ld.Image(array=array, quality=95, format="jpeg"),
+        "class": np.random.randint(10),
+    }
 
 if __name__ == "__main__":
     # Exactly one of chunk_bytes or chunk_size
@@ -283,6 +297,128 @@ ld.map(
 ✅ Enterprise security:       Self host or process data on your cloud account with Lightning Studios.  
 
 &nbsp;
+
+----
+
+# Modality <a id="media-types"></a>
+
+Wrap each file so a caption is not treated as a path: Text(path=...), Image(path=...), Audio(path=...). Path and raw bytes are stored as-is; array / image / mesh encode.
+
+<table width="100%">
+<tr>
+<th align="left">Type</th>
+<th align="left">Write</th>
+<th align="left">Stream</th>
+</tr>
+<tr>
+<td colspan="3"><strong>Text</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/text.py">Text</a></td>
+<td>Text(path="a.txt")<br>Text(bytes=utf8)<br>Text(text="a caption")</td>
+<td>text  # str</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/text.py">Tokens</a></td>
+<td>Tensor(array=token_ids)<br>optimize(..., item_loader=TokensLoader())</td>
+<td>tokens  # Tensor, length block_size — <a href="#llm-training">LLM training</a></td>
+</tr>
+<tr>
+<td colspan="3"><strong>Image</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/image.py">Image</a></td>
+<td>Image(path="a.jpg")<br>Image(bytes=jpeg)<br>Image(array=hwc, quality=95, format="jpeg")</td>
+<td>image.shape  # Tensor CHW</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/jpeg.py">Jpeg</a></td>
+<td>Jpeg(path="a.jpg")<br>Jpeg(array=hwc, quality=95)</td>
+<td>image.shape  # Tensor CHW</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/jpeg_array.py">JpegArray</a></td>
+<td>JpegArray(images=[Jpeg(path=p) for p in frames])</td>
+<td>images[0].shape  # Tensor CHW</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/pil.py">Pil</a></td>
+<td>Pil(path="a.png")<br>Pil(image=pil_img, mode="RGB")</td>
+<td>pil_img.size  # PIL.Image</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/tiff.py">Tiff</a></td>
+<td>Tiff(path="a.tif")<br>Tiff(array=hw)</td>
+<td>array.shape  # NumPy</td>
+</tr>
+<tr>
+<td colspan="3"><strong>Audio and Video</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/audio.py">Audio</a></td>
+<td>Audio(path="a.wav")<br>Audio(bytes=wav)<br>Audio(array=wave, sampling_rate=16000)</td>
+<td>audio["array"]<br>audio["sampling_rate"]</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/video.py">Video</a></td>
+<td>Video(path="c.mp4")<br>Video(bytes=mp4)<br>Video(array=frames, fps=25)</td>
+<td>video.get_frames_at(0)<br>video.get_frames_in_range(0, 8)</td>
+</tr>
+<tr>
+<td colspan="3"><strong>File</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/file.py">File</a></td>
+<td>File(path="doc.bin")<br>File(bytes=blob)</td>
+<td>sidecar  # raw bytes</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/pdf.py">Pdf</a></td>
+<td>Pdf(path="p.pdf")<br>Pdf(pdf=pdfplumber_doc)</td>
+<td>pdf.pages[0]  # Pdfplumber</td>
+</tr>
+<tr>
+<td colspan="3"><strong>3D and volume</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/mesh.py">Mesh</a></td>
+<td>Mesh(path="m.glb")<br>Mesh(mesh=trimesh_obj, file_type="glb")</td>
+<td>mesh.vertices  # Trimesh</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/nifti.py">Nifti</a></td>
+<td>Nifti(path="v.nii.gz")<br>Nifti(array=vol, affine=np.eye(4))</td>
+<td>nifti.get_fdata()  # Nibabel</td>
+</tr>
+<tr>
+<td colspan="3"><strong>Array and Graph</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/numpy_array.py">Numpy</a></td>
+<td>np.load("a.npy")<br>np.zeros((3, 4, 4))</td>
+<td>array  # NumPy</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/tensor.py">Tensor</a></td>
+<td>Tensor(array=torch.randn(3, 4, 4))</td>
+<td>feat  # Tensor — 1-D token ids use TokensLoader under Text</td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/graph.py">Graph</a></td>
+<td>Data(x=…, edge_index=…, y=…)<br>Graph(x=…, edge_index=…, y=…)<br>Graph(data=pyg_data)</td>
+<td>graph.x, graph.edge_index  # PyG Data or Graph — <a href="#pyg-graphs">PyG graphs</a></td>
+</tr>
+<tr>
+<td colspan="3"><strong>Parquet</strong></td>
+</tr>
+<tr>
+<td valign="top"><a href="examples/modality/parquet.py">Parquet</a></td>
+<td>folder of .parquet files<br>StreamingDataset(..., item_loader=ParquetLoader())</td>
+<td>row["col"]  # dict of columns — <a href="#stream-parquet">stream parquet</a></td>
+</tr>
+</table>
+
+Examples (path on disk → optimize → batch): [examples/modality](examples/modality).
 
 ----
 
@@ -501,24 +637,18 @@ How you return images from `optimize` controls storage size and streaming speed.
 
 | What you return | Serializer | Result |
 |-----------------|------------|--------|
-| `PIL.JpegImageFile` (e.g. `Image.open("x.jpg")`) | JPEG | Compressed bytes — **preferred** |
-| Plain `PIL.Image` / `Image.fromarray(...)` | PIL RAW | Uncompressed pixels — often **10×+ larger** |
+| `litdata.Image(path=...)` / `Image(array=..., quality=95, format="jpeg")` | `image` | Compressed bytes — **preferred** |
+| `litdata.Jpeg(path=...)` / `Jpeg(array=..., quality=95)` | `jpeg` | JPEG bytes |
+| `PIL.JpegImageFile` (e.g. `PIL.Image.open("x.jpg")`) | `jpeg` | Compressed bytes |
+| Plain `PIL.Image` / `Image.fromarray(...)` | `pil` | Uncompressed pixels — often **10×+ larger** |
 
-**Best practice:** store JPEG at **quality ≈ 95** (or keep existing `.jpg` files). Resize when helpful.
+**Best practice:** wrap with `Image` / `Jpeg` at **quality ≈ 95**, or keep existing `.jpg` files via `Image(path=...)`. Resize when helpful.
 
 ```python
-import io
-from PIL import Image
 import litdata as ld
 
 def load_image(path):
-    img = Image.open(path)
-    if not str(path).lower().endswith((".jpg", ".jpeg")):
-        buf = io.BytesIO()
-        img.convert("RGB").save(buf, format="JPEG", quality=95)
-        buf.seek(0)
-        img = Image.open(buf)  # JpegImageFile
-    return {"image": img, "path": path}
+    return {"image": ld.Image(path=path, quality=95, format="jpeg"), "id": path}
 
 if __name__ == "__main__":
     ld.optimize(fn=load_image, inputs=list_of_paths, output_dir="fast_data", chunk_bytes="64MB", num_workers=8)
@@ -532,9 +662,9 @@ Ready-made ImageNet optimize/stream scripts: `benchmarks/litdata/` (`--write_mod
   <summary> ✅ Custom serializers <a id="serializers" href="#serializers">🔗</a> </summary>
 &nbsp;
 
-LitData serializes each leaf of your sample with a pluggable registry. Built-ins (tried in order) include: `str`, `bool`, `int`, `float`, `video`, `tifffile`, `pil`, `jpeg`, `jpeg_array`, `bytes`, `numpy` / `tensor` (and no-header variants), and `pickle` (fallback).
+LitData serializes each **pytree leaf** with a pluggable registry. Built-ins (tried in order) include: `str`, `bool`, `int`, `float`, `video`, `audio`, `image`, `nifti`, `mesh`, `pdf`, `tifffile`, `file`, `pil`, `jpeg`, `jpeg_array`, `bytes`, `numpy` / `tensor` (and no-header variants), `graph`, and `pickle` (fallback).
 
-For images, returning a `JpegImageFile` selects **`jpeg`**; a plain `PIL.Image` selects **`pil`** (raw pixels). See [Optimize images as JPEG](#optimize-jpeg).
+Prefer [typed media wrappers](#media-types) (`Audio`, `Video`, `Image`, `Graph`, …) so a filepath is not confused with a caption. For images, `Image(..., quality=95, format="jpeg")` or a `JpegImageFile` stores JPEG; a plain `PIL.Image` selects **`pil`** (raw pixels). See [Optimize images as JPEG](#optimize-jpeg).
 
 Pass custom serializers when **streaming** (and when using the lower-level `Cache` writer):
 
@@ -558,7 +688,133 @@ dataset = StreamingDataset(
 )
 ```
 
-Keys you pass are tried before the defaults (so they win over `pickle`). `optimize()` uses the built-in registry based on the Python types your `fn` returns — prefer JPEG / numpy / tensor leaves for best results.
+Keys you pass are tried before the defaults (so they win over `pickle`). `optimize()` uses the built-in registry based on the Python types your `fn` returns — prefer typed wrappers / JPEG / numpy / tensor leaves for best results.
+
+</details>
+
+<details>
+  <summary> ✅ Stream PyG graphs <a id="pyg-graphs" href="#pyg-graphs">🔗</a> </summary>
+&nbsp;
+
+Store [PyTorch Geometric](https://pytorch-geometric.readthedocs.io/) `Data` / `HeteroData` as packed tensors (`to_dict()`), not `torch.save` / pickle. On read, LitData reconstructs with `from_dict` when `torch-geometric` is installed. `optimize` needs a **top-level** function (spawn).
+
+`StreamingDataLoader` uses `litdata_collate` by default: graph samples become a `DataBatch` (`Batch.from_data_list`); everything else uses PyTorch `default_collate`. For `follow_batch` / `exclude_keys`, use `torch_geometric.loader.DataLoader`. Without PyG, graph batches stay a list of `Graph`.
+
+### Homogeneous `Data` + GCN
+
+```python
+import torch
+import torch.nn.functional as F
+from torch_geometric.data import Data
+from torch_geometric.nn import GCNConv, global_mean_pool
+
+from litdata import StreamingDataLoader, StreamingDataset, optimize
+
+def make_graph(i: int) -> Data:
+    n = 8 + i % 5
+    src = torch.randint(0, n, (12,), dtype=torch.long)
+    dst = torch.randint(0, n, (12,), dtype=torch.long)
+    return Data(
+        x=torch.randn(n, 8),
+        edge_index=torch.stack([src, dst], 0),
+        y=torch.tensor(i % 3),
+        train_mask=torch.ones(n, dtype=torch.bool),
+        num_nodes=n,
+    )
+
+optimize(make_graph, inputs=list(range(1024)), output_dir="graphs", chunk_size=64)
+
+dataset = StreamingDataset("graphs")
+sample = dataset[0]  # Data when PyG is installed, else Graph
+loader = StreamingDataLoader(dataset, batch_size=32, shuffle=True)
+batch = next(iter(loader))  # DataBatch
+
+class Net(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = GCNConv(8, 16)
+        self.lin = torch.nn.Linear(16, 3)
+
+    def forward(self, data):
+        x = F.relu(self.conv(data.x, data.edge_index))
+        return self.lin(global_mean_pool(x, data.batch))
+```
+
+### `Graph` wrapper (no PyG at write time)
+
+```python
+from litdata import Graph, optimize
+
+def make_graph(i: int) -> Graph:
+    n = 6
+    return Graph(
+        x=torch.randn(n, 4),
+        edge_index=torch.tensor([[0, 1, 2], [1, 2, 0]], dtype=torch.long),
+        y=torch.tensor(i % 2),
+        data={"num_nodes": n},  # extra tensors/scalars; field kwargs override data=
+    )
+
+optimize(make_graph, inputs=list(range(256)), output_dir="graphs")
+# later: sample.to_pyg()  if the stream returned Graph
+```
+
+`Graph(data=pyg_data)` uses `pyg_data.to_dict()`. Do not mix tensor fields with an opaque NetworkX `data=`.
+
+### Heterogeneous `HeteroData`
+
+```python
+from torch_geometric.data import HeteroData
+
+from litdata import StreamingDataLoader, StreamingDataset, optimize
+
+def make_hetero(i: int) -> HeteroData:
+    data = HeteroData()
+    data["paper"].x = torch.randn(8, 16)
+    data["author"].x = torch.randn(4, 8)
+    data["author", "writes", "paper"].edge_index = torch.tensor(
+        [[0, 1, 2, 3], [0, 2, 4, 6]], dtype=torch.long
+    )
+    data.y = torch.tensor(i % 3)
+    return data
+
+optimize(make_hetero, inputs=list(range(512)), output_dir="hetero", chunk_size=32)
+
+dataset = StreamingDataset("hetero")
+sample = dataset[0]  # HeteroData
+print(sample["paper"].x.shape, sample["author", "writes", "paper"].edge_index.shape)
+
+loader = StreamingDataLoader(dataset, batch_size=16)
+batch = next(iter(loader))  # HeteroDataBatch
+# batch["paper"].x, batch["paper"].batch, batch["author", "writes", "paper"].edge_index
+```
+
+### Graph plus metadata in one sample
+
+```python
+def make_row(i: int) -> dict:
+    return {"id": i, "graph": make_graph(i)}
+
+optimize(make_row, inputs=list(range(1024)), output_dir="rows")
+loader = StreamingDataLoader(StreamingDataset("rows"), batch_size=8)
+batch = next(iter(loader))
+# batch["id"] is a tensor; batch["graph"] is a DataBatch
+```
+
+### Sample subgraphs first, then stream
+
+`NeighborLoader` needs one in-memory graph. To stream, run the sampler in `optimize` and store each subgraph as a `Data`:
+
+```python
+# sampler = NeighborSampler(big_graph, num_neighbors=[10, 10])
+
+def sample_seed(seed: int) -> Data:
+    out = sampler.sample_from_nodes(torch.tensor([seed]))
+    return Data(x=out.x, edge_index=out.edge_index, y=out.y)
+
+optimize(sample_seed, inputs=train_seeds.tolist(), output_dir="subgraphs")
+```
+
+NetworkX (or any non-tensor object) uses `Graph(data=nx_graph)` → `graph:pickle`. Do not `torch.save` a graph into the sample.
 
 </details>
 
@@ -944,16 +1200,15 @@ Local `output_dir` writes chunks in place. Remote inputs and outputs use the str
 
 ```python
 import numpy as np
-from PIL import Image
 import litdata as ld
 
 def random_images(index):
-    fake_images = Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8))
-    fake_labels = np.random.randint(10)
-
-    data = {"index": index, "image": fake_images, "class": fake_labels}
-
-    return data
+    array = np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)
+    return {
+        "index": index,
+        "image": ld.Image(array=array, quality=95, format="jpeg"),
+        "class": np.random.randint(10),
+    }
 
 if __name__ == "__main__":
     # The optimize function writes data in an optimized format.
@@ -1338,15 +1593,15 @@ Merge multiple optimized datasets into one.
 
 ```python
 import numpy as np
-from PIL import Image
 
-from litdata import StreamingDataset, merge_datasets, optimize
+from litdata import Image, StreamingDataset, merge_datasets, optimize
 
 
 def random_images(index):
+    array = np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)
     return {
         "index": index,
-        "image": Image.fromarray(np.random.randint(0, 256, (32, 32, 3), dtype=np.uint8)),
+        "image": Image(array=array, quality=95, format="jpeg"),
         "class": np.random.randint(10),
     }
 
@@ -1363,6 +1618,16 @@ if __name__ == "__main__":
     print(len(dataset))
     # out: 1000
 ```
+
+If you wrote chunks yourself (`Cache` / `BinaryWriter`) and only have `{rank}.index.json` shards, finish the dataset:
+
+```python
+from litdata import complete_dataset, StreamingDataset
+
+complete_dataset("my_chunks")  # no-op if index.json already exists
+StreamingDataset("my_chunks")  # also tries this automatically
+```
+
 </details>
 
 <details>
@@ -1448,6 +1713,13 @@ print(test_dataset)
 # out: 50,000
 ```
 
+Or pick exact indices with `StreamingDataset.subset`:
+
+```python
+train = dataset.subset(range(0, 30_000))
+# dataset.subset(slice(0, 1000))
+```
+
 </details>
 
 <details>
@@ -1464,6 +1736,9 @@ dataset = StreamingDataset("s3://my-bucket/my-data", subsample=0.01) # data are 
 
 print(len(dataset)) # display the length of your data
 # out: 1000
+
+# or a list / slice of global indices
+small = dataset.subset([0, 10, 20])
 ```
 
 </details>
@@ -1580,7 +1855,7 @@ ld.index_parquet_dataset(
 
 ### Stream with `ParquetLoader`
 
-Unlike `hf://`, local/S3/GCS parquet **does not** auto-select the loader — pass `ParquetLoader` explicitly (it must match `index.json`).
+If the folder looks like parquet and has no `index.json`, `StreamingDataset` now **builds the index automatically**. You still need `ParquetLoader` for local/S3/GCS (it must match `index.json`). `hf://` already auto-indexes and selects the loader.
 
 ```python
 import litdata as ld
@@ -1886,7 +2161,8 @@ export LITDATA_ASYNC_MIN_PRE_DOWNLOAD=0
 | `LITDATA_OBSTORE_STREAM_MIN_CHUNK_MIB` | `8` | S3 obstore stream chunk size (MiB) |
 | `MAX_WAIT_TIME` | `120` | Seconds to wait for a chunk before error |
 | `FORCE_DOWNLOAD_TIME` | `30` | Seconds before force re-download of a missing chunk |
-| `LITDATA_DISABLE_VERSION_CHECK` | `0` | `1` skips the upgrade tip |
+| `LITDATA_CHECK_UPDATES` | unset | `1` enables the PyPI upgrade tip (off by default) |
+| `LITDATA_DISABLE_VERSION_CHECK` | on unless updates enabled | `1` skips the upgrade tip |
 | `HF_TOKEN` | — | Gated Hugging Face datasets |
 | `DEBUG_LITDATA` / `PRINT_DEBUG_LOGS` | `0` | Internal debug / stdout logs |
 | `LITDATA_LOG_FILE` | `litdata_debug.log` | `enable_tracer()` output path |
@@ -2393,26 +2669,12 @@ Speed to stream Imagenet 1.2M from other cloud storage providers:
 |---|---|---|---|
 | Cloudflare R2 | LitData | **5335** | **5630** |
 
-Speed to stream Imagenet 1.2M from local disk with ffcv vs LitData:
-| Framework | Dataset Mode | Dataset Size @ 256px | Images / sec 1st Epoch (float32) | Images / sec 2nd Epoch (float32) |
-|---|---|---|---|---|
-| LitData | PIL RAW | 168 GB | 6647 | 6398 | 
-| LitData | JPEG 90% | 12 GB | 6553 | 6537 |
-| ffcv (os_cache=True) | RAW | 170 GB | 7263 | 6698 |
-| ffcv (os_cache=False) | RAW | 170 GB | 7556 | 8169 |
-| ffcv(os_cache=True) | JPEG 90% | 20 GB | 7653 | 8051 |
-| ffcv(os_cache=False) | JPEG 90% | 20 GB | 8149 | 8607 |
+Speed to stream a synthetic ImageNet-scale set from **Vast NFS** with POSIX-fast (mmap in place, decode only, no transforms):
 
-Speed to stream a **synthetic ImageNet-scale set from Vast NFS** (NFSv3 `nconnect=32`, 208-CPU host, ~1 TiB RAM). Dataset: **1.08M** JPEG q95 256×256 (~160 GiB, 64 MiB chunks). `StreamingDataLoader`, batch **256**, `shuffle=True`, `drop_last=True`, decode only unless noted. POSIX-fast mmaps chunks **in place** (no copy into `~/.lightning/chunks`).
-
-| Setup | Workers | Images / sec |
-|---|---|---|
-| Copy into local cache (`LITDATA_POSIX_FAST=0`) | 48 | **16.7k** (2-epoch avg) |
-| POSIX-fast (this default on local/Vast paths) | 48 | **18.2k** |
-| POSIX-fast + README ImageNet augs (crop 224, flip, float32) | 48 | **12.9k** |
-| POSIX-fast, all CPU cores | **208** | **35.8k** |
-
-Notes: 208 workers need enough **MemAvailable**. This host had **928×1 GiB hugepages** reserved and idle (~900 GiB locked); after `nr_hugepages=0`, 208 workers stayed healthy. If `num_workers=os.cpu_count()` would crowd RAM, LitData **clamps** workers (`LITDATA_POSIX_MAX_WORKERS=0` disables) and skips `WILLNEED` prefetch. Real ImageNet JPEG 90% is much smaller (~12 GiB) and usually decodes faster than this q95 noise set.
+| Workers | Images / sec |
+|---|---|
+| 48 | **18.2k** |
+| 208 | **35.8k** |
 
 ### Raw Dataset
 
@@ -2520,6 +2782,80 @@ Below are templates for real-world applications of LitData at scale.
 
 ----
 
+# Used by
+
+<table width="100%">
+<tr>
+<th align="left" width="18%">Project</th>
+<th align="left">Description</th>
+</tr>
+<tr>
+<td valign="top"><a href="https://github.com/sunlabuiuc/PyHealth">PyHealth</a></td>
+<td>Deep-learning toolkit for clinical prediction (MIMIC, eICU, OMOP, sleep, CXR). <code>set_task()</code> writes processed samples with LitData; <code>SampleDataset</code> subclasses <code>StreamingDataset</code> so training streams chunked EHR tensors instead of holding the cohort in RAM.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://github.com/prescient-design/lobster">LBSTER</a></td>
+<td>Protein and biological-sequence language models from Prescient Design (Genentech). Pre-training and concept-bottleneck models (fitness, embeddings, guided generation) stream large sequence corpora through LitData.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://github.com/OpenSynth-energy/OpenSynth">OpenSynth</a></td>
+<td>Open toolkit for synthetic smart-meter / energy time series. Generated or historical meter traces are optimized and streamed for model training.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://github.com/BiomedSciAI/biomed-multi-view">biomed-multi-view</a></td>
+<td>IBM BiomedSciAI multi-view biomedical models. LitData is used to cache and stream paired modalities during training.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://github.com/cma2015/DEM">DEM</a></td>
+<td>Phenotype and gene-mining pipeline (<code>biodem</code>). Large genomic / trait tables are packed into LitData chunks for repeated training passes.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://pypi.org/project/deeptan/">deeptan</a></td>
+<td>Graph multi-task models for multi-omics trait-associated networks. Guide graphs and expression tables are converted to LitData chunks before GNN training.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://github.com/avitai/datarax">datarax</a></td>
+<td>Data tooling with an optional cloud-streaming extra that uses LitData to read remote datasets without a full local copy.</td>
+</tr>
+<tr>
+<td valign="top"><a href="https://pypi.org/project/fasr/">fasr</a></td>
+<td>Speech ASR framework. The LitData extra streams audio and transcripts for training instead of random-access file lists.</td>
+</tr>
+</table>
+
+# Skills <a id="skills"></a>
+
+Coding agents (Cursor, Claude Code, and others) should load the LitData skill instead of guessing the API.
+
+```bash
+npx skills add Lightning-AI/litData
+```
+
+Useful options: `-g` (user-global), `-a cursor` (Cursor only), `-y` (non-interactive). In this repo the skill already lives at [`.claude/skills/litdata/`](.claude/skills/litdata/). Installer: [skills CLI](https://github.com/vercel-labs/skills).
+
+Start at [`SKILL.md`](.claude/skills/litdata/SKILL.md), then load [`reference/using-litdata.md`](.claude/skills/litdata/reference/using-litdata.md) before writing examples.
+
+| File | When to load |
+| --- | --- |
+| [SKILL.md](.claude/skills/litdata/SKILL.md) | Triggers, public API, traps |
+| [using-litdata.md](.claude/skills/litdata/reference/using-litdata.md) | Optimize / stream / raw / modality cookbook |
+| [streaming.md](.claude/skills/litdata/reference/streaming.md) | Read path, shuffle, resume, serializers |
+| [processing.md](.claude/skills/litdata/reference/processing.md) | optimize / map orchestration |
+| [data-movement.md](.claude/skills/litdata/reference/data-movement.md) | Download / upload / FUSE vs direct I/O |
+| [multi-node.md](.claude/skills/litdata/reference/multi-node.md) | Studio num_nodes jobs |
+| [resolver.md](.claude/skills/litdata/reference/resolver.md) | Paths, URLs, Studio mounts |
+| [storage-format.md](.claude/skills/litdata/reference/storage-format.md) | Chunks, `index.json`, writer / reader |
+| [cache-and-chunk-lifecycle.md](.claude/skills/litdata/reference/cache-and-chunk-lifecycle.md) | Prefetch and eviction |
+| [env-vars.md](.claude/skills/litdata/reference/env-vars.md) | LITDATA_* and DATA_OPTIMIZER_* |
+| [keyed-lookup.md](.claude/skills/litdata/reference/keyed-lookup.md) | key_fn, dataset_update |
+| [debugging.md](.claude/skills/litdata/reference/debugging.md) | enable_tracer, Litracer |
+| [benchmarking.md](.claude/skills/litdata/reference/benchmarking.md) | Fair benches |
+| [lightning-studio.md](.claude/skills/litdata/reference/lightning-studio.md) | Studio env and credentials |
+| [testing.md](.claude/skills/litdata/reference/testing.md) | Pytest / CI |
+| [contributing.md](.claude/skills/litdata/reference/contributing.md) | PR / lint path |
+
+Offline streaming what-if (not the Python package): [simulator/](simulator/) (litsim).
+
 # Community
 LitData is a community project accepting contributions -  Let's make the world's most advanced AI data processing framework.
 
@@ -2536,8 +2872,7 @@ LitData is a community project accepting contributions -  Let's make the world's
   author       = {Thomas Chaton and Lightning AI},
   title        = {LitData: Transform datasets at scale. Optimize datasets for fast AI model training.},
   year         = {2023},
-  howpublished = {\url{https://github.com/Lightning-AI/litdata}},
-  note         = {Accessed: 2025-04-09}
+  howpublished = {\url{https://github.com/Lightning-AI/litdata}}
 }
 ```
 
@@ -2545,8 +2880,12 @@ LitData is a community project accepting contributions -  Let's make the world's
 
 ## Papers with LitData
 
-* [Towards Interpretable Protein Structure
-Prediction with Sparse Autoencoders](https://arxiv.org/pdf/2503.08764) | [Github](https://github.com/johnyang101/reticular-sae) | (Nithin Parsan, David J. Yang and John J. Yang)
+Papers that train or stream with LitData (`optimize` / `StreamingDataset`). Scholar hits for “litdata streaming” are often weather *lightning* data, or mention LitData only as example source code.
+
+| Paper | Venue | How LitData is used |
+|---|---|---|
+| [Towards Interpretable Protein Structure Prediction with Sparse Autoencoders](https://arxiv.org/abs/2503.08764) ([code](https://github.com/johnyang101/reticular-sae)) | ICLR 2025 GEM | `optimize` shards ESM-2 embeddings; `StreamingDataset` streams from S3 for multi-GPU SAE training |
+| [TinyLlama: An Open-Source Small Language Model](https://arxiv.org/abs/2401.02385) ([code](https://github.com/jzhang38/TinyLlama)) | arXiv 2024 | 1.1B pretrain on SlimPajama + StarCoder via Lit-GPT’s `lightning.data` stack (now LitData): `CombinedStreamingDataset` + `TokensLoader` |
 
 ----
 

@@ -273,6 +273,12 @@ class PrepareChunksThread(Thread):
         file_existed = os.path.exists(chunk_filepath)
         try:
             self._item_loader.delete(chunk_index, chunk_filepath)
+            compressor = getattr(self._config, "_compressor_name", None)
+            basename = os.path.basename(chunk_filepath)
+            if compressor and chunk_filepath.endswith(".bin") and f".{compressor}." not in basename:
+                compressed = chunk_filepath.replace(".bin", f".{compressor}.bin")
+                with suppress(FileNotFoundError, PermissionError):
+                    os.remove(compressed)
             self._note_chunk_removed(chunk_index)
             # Only free a slot when we removed a real file that was counted toward
             # the budget. Force-redownload keeps the reservation for the replacement.
@@ -756,8 +762,6 @@ class BinaryReader:
 
         """
         super().__init__()
-        warnings.filterwarnings("ignore", message=".*The given buffer is not writable.*")
-
         self._cache_dir = cache_dir
         self._remote_input_dir = remote_input_dir
 
@@ -790,6 +794,8 @@ class BinaryReader:
         self._posix_fast = False
         self._posix_keep = 4
         self._posix_willneed = True
+        self._timing = StreamingTimingStats.instance()
+        self._pytree_loader = isinstance(self._item_loader, PyTreeLoader)
 
     def _get_chunk_index_from_index(self, index: int) -> tuple[int, int]:
         # Load the config containing the index
@@ -955,7 +961,7 @@ class BinaryReader:
         Prefetching should reduce the wait time to be the batch available.
 
         """
-        if not isinstance(index, ChunkedIndex):
+        if index.__class__ is not ChunkedIndex:
             raise ValueError("The Reader.read(...) method expects a chunked Index.")
 
         # Load the config containing the index
@@ -964,10 +970,10 @@ class BinaryReader:
 
         # Fetch the element
         chunk_filepath, begin, filesize_bytes = self.config[index]
-        timing = StreamingTimingStats.instance()
-        decode_t0 = timing.start()
+        timing = self._timing
+        decode_t0 = timing.start() if timing.enabled else None
 
-        if isinstance(self._item_loader, PyTreeLoader):
+        if self._pytree_loader:
             if (
                 self.on_demand_bytes
                 and self._config
@@ -980,7 +986,9 @@ class BinaryReader:
                 item = self._item_loader.load_item_from_bytes(raw_bytes, index.chunk_index)
             else:
                 self.setup_thread_and_download_chunk(index)
-                item = self._item_loader.load_item_from_chunk(
+                pytree_loader = self._item_loader
+                assert isinstance(pytree_loader, PyTreeLoader)
+                item = pytree_loader.load_item_from_chunk(
                     index.index, index.chunk_index, chunk_filepath, begin, filesize_bytes, self._encryption
                 )
         else:
@@ -1089,7 +1097,13 @@ class BinaryReader:
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state["_prepare_thread"] = None
+        # StreamingTimingStats holds a threading.Lock and is process-local.
+        state.pop("_timing", None)
         return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self._timing = StreamingTimingStats.instance()
 
     def __del__(self) -> None:
         # Release eagerly-acquired shared-chunk locks that were never released (e.g. the loop was

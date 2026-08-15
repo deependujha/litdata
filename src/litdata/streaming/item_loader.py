@@ -51,6 +51,11 @@ Interval = namedtuple("Interval", ["chunk_start", "roi_start_idx", "roi_end_idx"
 logger = logging.getLogger("litdata.streaming.item_loader")
 
 
+def _as_chunk_index(chunk_index: int) -> int:
+    """Normalize sampler / numpy indexes so mmap dict keys stay hash-stable."""
+    return int(chunk_index)
+
+
 def _open_chunk_file(chunk_filepath: str) -> FileIO:
     """Open a chunk for reading, retrying Windows ``PermissionError`` races.
 
@@ -647,8 +652,6 @@ class PyTreeLoader(BaseItemLoader):
         data = []
         for size, serializer in zip(sizes, self._serializers_list):
             data_bytes = raw_item_data[idx : idx + size]
-            if not isinstance(data_bytes, (bytes, bytearray)):
-                data_bytes = bytes(data_bytes)
             data.append(serializer.deserialize(data_bytes))
             idx += size
         if self._unflatten is not None:
@@ -792,9 +795,19 @@ class PyTreeLoader(BaseItemLoader):
 
                 [size_bytes][int_bytes][image_bytes][tensor_bytes]
         """
-        head = np.array(sizes, np.uint32).tobytes()
-        body = b"".join(data)
-        return head + body, None
+        n = len(sizes)
+        body_len = 0
+        for size in sizes:
+            body_len += size
+        header_len = 4 * n
+        out = bytearray(header_len + body_len)
+        if n:
+            out[0:header_len] = np.asarray(sizes, dtype=np.uint32).tobytes()
+        cursor = header_len
+        for chunk, size in zip(data, sizes):
+            out[cursor : cursor + size] = chunk
+            cursor += size
+        return bytes(out), None
 
     def __getstate__(self) -> dict[str, Any]:
         state = super().__getstate__()
@@ -923,8 +936,14 @@ class TokensLoader(BaseItemLoader):
             self._counter.pop(old_idx, None)
 
     def _load_chunk(self, chunk_index: int, chunk_filepath: str) -> None:
-        if chunk_index in self._mmaps:
+        chunk_index = _as_chunk_index(chunk_index)
+        if chunk_index in self._mmaps and chunk_index in self._buffers:
             return
+        if chunk_index in self._mmaps and chunk_index not in self._buffers:
+            mm = self._mmaps.pop(chunk_index)
+            with contextlib.suppress(BufferError, ValueError, OSError):
+                mm._mmap.close()
+            self._counter.pop(chunk_index, None)
         chunk = self._chunks[chunk_index]
 
         # Skip the header
@@ -944,7 +963,7 @@ class TokensLoader(BaseItemLoader):
             self._chunk_filepaths[chunk_filepath] = True
 
         if os.path.exists(chunk_filepath) and os.stat(chunk_filepath).st_size > 0:
-            self._load_chunk(chunk_index, chunk_filepath)
+            self._load_chunk(_as_chunk_index(chunk_index), chunk_filepath)
 
     def load_item_from_chunk(
         self,
@@ -955,6 +974,7 @@ class TokensLoader(BaseItemLoader):
         filesize_bytes: int,
     ) -> torch.Tensor:
         assert self._block_size
+        chunk_index = _as_chunk_index(chunk_index)
 
         if chunk_filepath in self._chunk_filepaths and not os.path.isfile(chunk_filepath):
             del self._chunk_filepaths[chunk_filepath]
@@ -966,7 +986,11 @@ class TokensLoader(BaseItemLoader):
         self._load_chunk(chunk_index, chunk_filepath)
         assert self._dtype
 
-        buffer: bytes = self._buffers[chunk_index]
+        buffer = self._buffers.get(chunk_index)
+        if buffer is None:
+            self._mmaps.pop(chunk_index, None)
+            self._load_chunk(chunk_index, chunk_filepath)
+            buffer = self._buffers[chunk_index]
 
         # offset: how many bytes to skip to get to the item we want to load
         #       -> if chunk begins at 5, and we want to load the item at index 7,
@@ -987,6 +1011,7 @@ class TokensLoader(BaseItemLoader):
         return data
 
     def delete(self, chunk_index: int, chunk_filepath: str) -> None:
+        chunk_index = _as_chunk_index(chunk_index)
         with trace_span("delete", CAT_DELETE, chunk=chunk_index):
             if os.path.exists(chunk_filepath):
                 if chunk_index in self._buffers:
@@ -1000,6 +1025,7 @@ class TokensLoader(BaseItemLoader):
 
     def close(self, chunk_index: int) -> None:
         """Release the memory-mapped file for a specific chunk index."""
+        chunk_index = _as_chunk_index(chunk_index)
         self._counter[chunk_index] -= 1
 
         if self._posix_fast:
@@ -1060,11 +1086,20 @@ class TokensLoader(BaseItemLoader):
             - bytes: The raw byte representation of tokenized data.
             - dimension: The number of tokens in the data (extracted from `flattened[0].shape[0]`).
         """
-        return data[0], flattened[0].shape[0]
+        leaf = flattened[0]
+        shape = getattr(leaf, "shape", None)
+        if shape is not None and len(shape) > 0:
+            return data[0], int(shape[0])
+        return data[0], len(leaf)
 
 
 class ParquetLoader(BaseItemLoader):
-    def __init__(self, pre_load_chunk: bool = False, low_memory: bool = True) -> None:
+    def __init__(
+        self,
+        pre_load_chunk: bool = False,
+        low_memory: bool = True,
+        columns: list[str] | None = None,
+    ) -> None:
         if not _POLARS_AVAILABLE:
             raise ModuleNotFoundError(
                 "You are using the Parquet item loader, which depends on `Polars > 1.0.0`.",
@@ -1076,6 +1111,7 @@ class ParquetLoader(BaseItemLoader):
         self._chunk_filepaths: dict[str, bool] = {}
         self._pre_load_chunk = pre_load_chunk
         self._low_memory = low_memory
+        self._columns = columns
 
         if not self._low_memory:
             logger.warning(
@@ -1129,7 +1165,10 @@ class ParquetLoader(BaseItemLoader):
         import polars as pl
 
         if chunk_index not in self._df and os.path.exists(chunk_filepath):
-            self._df[chunk_index] = pl.scan_parquet(chunk_filepath, low_memory=True).collect()
+            scan = pl.scan_parquet(chunk_filepath, low_memory=True)
+            if self._columns:
+                scan = scan.select(self._columns)
+            self._df[chunk_index] = scan.collect()
 
     def load_item_from_chunk(
         self,
@@ -1159,8 +1198,7 @@ class ParquetLoader(BaseItemLoader):
     def _get_item_with_low_memory(self, chunk_index: int, chunk_filepath: str, row_index: int) -> Any:
         """Retrieve a dataframe row from a parquet chunk in low memory mode.
 
-        This method reads only the necessary row group from the parquet file using PyArrow and Polars,
-        which helps in reducing memory usage.
+        This method reads only the necessary row group from the parquet file using PyArrow.
 
         Args:
             chunk_index (int): The index of the chunk to be accessed.
@@ -1172,7 +1210,6 @@ class ParquetLoader(BaseItemLoader):
         """
         import bisect
 
-        import polars as pl
         import pyarrow.parquet as pq
 
         # Load the Parquet file metadata if not already loaded
@@ -1200,11 +1237,7 @@ class ParquetLoader(BaseItemLoader):
             # update read count
             self._chunk_row_group_item_read_count[chunk_index][row_group_index] += 1
         else:
-            # Load the row group and convert it to a Polars DataFrame
-            row_group = self._df[chunk_index].read_row_group(row_group_index)
-            row_group_df = pl.from_arrow(row_group)
-
-            # Cache the loaded row group
+            row_group_df = self._df[chunk_index].read_row_group(row_group_index, columns=self._columns)
             if chunk_index not in self._chunk_row_groups:
                 self._chunk_row_groups[chunk_index] = {}
                 self._chunk_row_group_item_read_count[chunk_index] = {}
@@ -1212,16 +1245,12 @@ class ParquetLoader(BaseItemLoader):
             self._chunk_row_groups[chunk_index][row_group_index] = row_group_df
             self._chunk_row_group_item_read_count[chunk_index][row_group_index] = 1
 
-        # Check if the row group has been fully read and release memory if necessary
         read_count = self._chunk_row_group_item_read_count[chunk_index][row_group_index]
         if read_count >= row_group_size:
-            # Release memory for the fully read row group
             del self._chunk_row_groups[chunk_index][row_group_index]
             del self._chunk_row_group_item_read_count[chunk_index][row_group_index]
 
-        # Return the specific row from the dataframe
-        # Note: The `named=True` argument is used to return the row as a dictionary
-        return row_group_df.row(row_index_within_group, named=True)  # type: ignore
+        return {name: row_group_df.column(name)[row_index_within_group].as_py() for name in row_group_df.column_names}
 
     def _get_item(self, chunk_index: int, chunk_filepath: str, index: int) -> Any:
         """Retrieve a dataframe row from a parquet chunk by loading the entire chunk into memory.
@@ -1241,7 +1270,10 @@ class ParquetLoader(BaseItemLoader):
         import polars as pl
 
         if chunk_index not in self._df:
-            self._df[chunk_index] = pl.scan_parquet(chunk_filepath, low_memory=True).collect()
+            scan = pl.scan_parquet(chunk_filepath, low_memory=True)
+            if self._columns:
+                scan = scan.select(self._columns)
+            self._df[chunk_index] = scan.collect()
 
         # Retrieve the specific row from the dataframe
         # Note: The `named=True` argument is used to return the row as a dictionary
