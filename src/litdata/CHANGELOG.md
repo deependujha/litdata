@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](http://keepachangelog.com/en/1.0.0/).
 
 ## [unreleased] - YYYY-MM-DD
 
+### Fixed
+
+- Multi-node `FullShuffle` epoch ≥ 2 keeps each node's unique chunk set when that shard fits in `max_cache_size` (in-chunk permute is seeded by the global chunk id). If it does not fit, chunks are re-scheduled across nodes.
+
+### Changed
+
+- `StreamingDataset` / `Cache` `max_cache_size`: `None` uses 75% of free disk (leave ≥50GB when possible). `"100G"` / `"50GB"` pins bytes; `0.90` (or `MAX_CACHE_SIZE=0.90`) uses that fraction of currently free space.
+
 ## [0.2.71] - 2026-08-15
 
 ### Added
