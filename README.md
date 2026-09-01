@@ -46,6 +46,7 @@
   <a href="#speed-up-model-training">Optimize data</a> •
   <a href="#transform-datasets">Transform data</a> •
   <a href="#modality">Modality</a> •
+  <a href="#huggingface-datasets">Hugging Face Datasets</a> •
   <a href="#key-features">Features</a> •
   <a href="#stream-raw">Stream raw files</a> •
   <a href="#resolve-paths">Paths & cloud URLs</a> •
@@ -421,6 +422,75 @@ Wrap each file so a caption is not treated as a path: Text(path=...), Image(path
 Examples (path on disk → optimize → batch): [examples/modality](examples/modality).
 
 ----
+
+# Hugging Face Datasets 🤗 <a id="huggingface-datasets"></a><a id="stream-hf"></a>
+
+Train on the Hub datasets you already use. Drop in a Hugging Face dataset with one call — then optimize once onto Lightning Cloud storage when you want faster training I/O than Hub parquet or Hugging Face `datasets` streaming.
+
+<details>
+  <summary>How to get the dataset URL</summary>
+
+https://github.com/user-attachments/assets/3ba9e2ef-bf6b-41fc-a578-e4b4113a0e72
+
+</details>
+
+```bash
+pip install 'litdata[extras]' huggingface_hub
+```
+
+Gated datasets: set `HF_TOKEN`.
+
+**Load from the Hub**
+
+```python
+import litdata as ld
+
+dataset = ld.StreamingDataset("hf://datasets/HuggingFaceH4/ultrachat_200k/data/train_sft-*.parquet")
+print("Sample", dataset[0])
+
+dataloader = ld.StreamingDataLoader(
+    dataset, batch_size=4, num_workers=4, multiprocessing_context="spawn"
+)
+for sample in dataloader:
+    pass
+```
+
+**Optimize once for faster training**
+
+```python
+import litdata as ld
+
+ld.optimize_hf("stanfordnlp/imdb", output_dir="imdb-opt", split="train")
+dataset = ld.StreamingDataset("imdb-opt", shuffle=True, drop_last=True)
+```
+
+`optimize_hf` converts a Hub dataset into LitData chunks. Later calls reuse `output_dir` if it is already optimized. Pass `revision=`, `config=`, `chunk_size=`, or `fn=` when you need them.
+
+### Faster than Hub parquet and `datasets` streaming
+
+`StreamingDataset("hf://...")` loads Hub parquet as-is. Run `optimize_hf` once when you want higher training throughput. Both beat Hugging Face `datasets` streaming (`load_dataset(..., streaming=True)`) on every split below. Optimized chunks are **not** always fastest: **12/15** prefer `optimize_hf`; parquet stays ahead on [OpenThoughts](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k), [food101](https://huggingface.co/datasets/ethz/food101), and [cifar100](https://huggingface.co/datasets/uoft-cs/cifar100). Minipile, food101, and superb ks were re-measured with current defaults; the other twelve rows are unchanged.
+
+Sequential one-epoch read after a 200-row warmup. Reproduce: `scripts/bench/bench_hf_hub_suite.py`.
+
+| Dataset | `optimize_hf` rows/s | parquet (`hf://`) rows/s | HF streaming rows/s |
+| --- | ---: | ---: | ---: |
+| [HuggingFaceH4/ultrachat_200k](https://huggingface.co/datasets/HuggingFaceH4/ultrachat_200k) / train_sft | **47,285** | 31,209 | 6,752 |
+| [open-thoughts/OpenThoughts-114k](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k) / train | 6,508 | **12,292** | 1,492 |
+| [abisee/cnn_dailymail](https://huggingface.co/datasets/abisee/cnn_dailymail) / train / 3.0.0 | **57,944** | 44,286 | 13,874 |
+| [teknium/OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) / train | **108,420** | 74,502 | 8,280 |
+| [roneneldan/TinyStories](https://huggingface.co/datasets/roneneldan/TinyStories) / train | **164,825** | 141,235 | 58,331 |
+| [fancyzhx/amazon_polarity](https://huggingface.co/datasets/fancyzhx/amazon_polarity) / train | **214,217** | 162,448 | 14,613 |
+| [Yelp/yelp_review_full](https://huggingface.co/datasets/Yelp/yelp_review_full) / train | **123,670** | 88,400 | 58,621 |
+| [EdinburghNLP/xsum](https://huggingface.co/datasets/EdinburghNLP/xsum) / train | **55,941** | 37,684 | 15,377 |
+| [Anthropic/hh-rlhf](https://huggingface.co/datasets/Anthropic/hh-rlhf) / train | **92,741** | 46,573 | 18,263 |
+| [JeanKaddour/minipile](https://huggingface.co/datasets/JeanKaddour/minipile) / train | **81,871** | 50,160 | 3,928 |
+| [ethz/food101](https://huggingface.co/datasets/ethz/food101) / train | 1,989 | **4,782** | 384 |
+| [zh-plus/tiny-imagenet](https://huggingface.co/datasets/zh-plus/tiny-imagenet) / train | **57,855** | 43,535 | 6,491 |
+| [uoft-cs/cifar10](https://huggingface.co/datasets/uoft-cs/cifar10) / train | **31,671** | 20,657 | 8,843 |
+| [uoft-cs/cifar100](https://huggingface.co/datasets/uoft-cs/cifar100) / train | 22,448 | **24,332** | 7,553 |
+| [s3prl/superb](https://huggingface.co/datasets/s3prl/superb) / train / ks | **7,101** | 6,775 | 314 |
+
+Your own parquet on disk or S3 → [Stream parquet datasets](#stream-parquet).
 
 # Key Features
 
@@ -868,89 +938,6 @@ for sample in dataloader:
 </details>
 
 <details>
-  <summary> ✅ Stream Hugging Face 🤗 datasets <a id="stream-hf" href="#stream-hf">🔗</a> </summary>
-
-&nbsp;
-
-To use your favorite  Hugging Face dataset with LitData, simply pass its URL to `StreamingDataset`.
-
-<details>
-  <summary>How to get HF dataset URI?</summary>
-
-https://github.com/user-attachments/assets/3ba9e2ef-bf6b-41fc-a578-e4b4113a0e72
-
-</details>
-
-**Prerequisites:**
-
-```sh
-pip install 'litdata[extras]' huggingface_hub
-
-# Optional: faster downloads on high-bandwidth networks
-pip install hf_transfer
-export HF_HUB_ENABLE_HF_TRANSFER=1
-```
-
-**Supported for HF:** datasets stored as **Parquet** only. Gated datasets: set `HF_TOKEN`.
-
-**Stream Hugging Face dataset** (auto-index + auto `ParquetLoader`):
-
-```python
-import litdata as ld
-
-hf_dataset_uri = "hf://datasets/leonardPKU/clevr_cogen_a_train/data"
-
-dataset = ld.StreamingDataset(hf_dataset_uri)  # indexes on first use; caches index.json locally
-print("Sample", dataset[0])  # dict of columns
-
-# With workers on Linux, use spawn (same as other ParquetLoader usage)
-dataloader = ld.StreamingDataLoader(
-    dataset, batch_size=4, num_workers=4, multiprocessing_context="spawn"
-)
-for sample in dataloader:
-    pass
-```
-
-Unlike local/S3 parquet ([stream parquet](#stream-parquet)), `hf://` **automatically** indexes (if needed) and selects `ParquetLoader`.
-
-### Indexing the HF dataset (optional, faster cold start)
-
-```python
-import litdata as ld
-
-# Returns the local cache directory that contains index.json
-cache_dir = ld.index_hf_dataset("hf://datasets/leonardPKU/clevr_cogen_a_train/data")
-```
-
-Or control the index path explicitly:
-
-```python
-import litdata as ld
-from litdata.streaming.item_loader import ParquetLoader
-
-uri = "hf://datasets/open-thoughts/OpenThoughts-114k/data"
-ld.index_parquet_dataset(uri, "hf-index-dir")  # writes index under hf-index-dir
-
-dataset = ld.StreamingDataset(uri, item_loader=ParquetLoader(), index_path="hf-index-dir")
-for batch in ld.StreamingDataLoader(dataset, batch_size=4, multiprocessing_context="spawn"):
-    pass
-```
-
-See also [Stream parquet datasets](#stream-parquet) for `ParquetLoader` knobs, wildcards, and stream-vs-optimize.
-
-### LitData `Optimize` v/s `Parquet`
-<!-- TODO: Update benchmark -->
-Below is the benchmark for the `Imagenet dataset (155 GB)`, demonstrating that **`optimizing the dataset using LitData is faster and results in smaller output size compared to raw Parquet files`**.
-
-| **Operation**                    | **Size (GB)** | **Time (seconds)** | **Throughput (images/sec)** |
-|-----------------------------------|---------------|---------------------|-----------------------------|
-| LitData Optimize Dataset          | 45            | 283.17             | 4000-4700                  |
-| Parquet Optimize Dataset          | 51            | 465.96             | 3600-3900                  |
-| Index Parquet Dataset (overhead)  | N/A           | 6                  | N/A                         |
-
-</details>
-
-<details>
   <summary> ✅ Streams on multi-GPU, multi-node <a id="multi-gpu" href="#multi-gpu">🔗</a> </summary>
 
 &nbsp;
@@ -993,9 +980,9 @@ Shuffling is **deterministic** and designed for distributed training:
 
 The permutation depends on `seed`, the epoch, and chunk metadata — the same settings always yield the same order (required for resumable `state_dict`).
 
-**Object storage (`s3://`, `gs://`, …)** globally permutes chunks (`FullShuffle`). Random chunk order is cheap once files are already copied into the local cache.
+**Object storage (`s3://`, `gs://`, …)** globally permutes chunks (`FullShuffle`). Random chunk order is cheap once files are already copied into the local cache. Items *inside* a chunk are shuffled as aligned ``batch_decode`` windows. Pass ``item_shuffle_window=256`` (default / ``"auto"``) so blocks are shuffled, then the items inside each block — training still reuses the decode cache. ``item_shuffle_window=0`` (or ``"full"``) restores a full in-chunk permutation. ``LITDATA_ITEM_SHUFFLE_WINDOW`` applies only when the argument is omitted.
 
-**POSIX-fast** (automatic for any local path) mmaps chunks in place. **Vast / NFS / Lustre / GPFS** (and `LITDATA_POSIX_FAST=1`) use `WindowShuffle`: each worker gets **whole chunks** in a sequential stripe, then shuffles only inside a sliding window (default **16**, `LITDATA_POSIX_SHUFFLE_WINDOW`) for both chunk order and in-chunk items. Local disks (ext4/xfs) keep global `FullShuffle`. Object URLs stay on `FullShuffle`. `LITDATA_POSIX_FAST=0` disables in-place mmap.
+**POSIX-fast** (automatic for any local path) mmaps chunks in place. **Vast / NFS / Lustre / GPFS** (and `LITDATA_POSIX_FAST=1`) use `WindowShuffle`: each worker gets **whole chunks** in a sequential stripe, then shuffles chunk order inside a sliding window (default **16**, `LITDATA_POSIX_SHUFFLE_WINDOW`). In-chunk items still use ``item_shuffle_window``. Local disks (ext4/xfs) keep global `FullShuffle`. Object URLs stay on `FullShuffle`. `LITDATA_POSIX_FAST=0` disables in-place mmap.
 
 ```python
 from litdata import StreamingDataset, StreamingDataLoader
@@ -1005,6 +992,7 @@ train = StreamingDataset(
     shuffle=True,
     drop_last=True,  # keep every rank/worker at the same length (default True under DDP)
     seed=42,         # default is 42; keep stable when resuming
+    item_shuffle_window=256,  # 0 / "full" = permute every item in the chunk
 )
 loader = StreamingDataLoader(train, batch_size=64, num_workers=8)
 
@@ -1807,7 +1795,7 @@ The `overwrite` mode will delete the existing data and start from fresh.
   <summary> ✅ Stream parquet datasets <a id="stream-parquet" href="#stream-parquet">🔗</a> </summary>
 &nbsp;
 
-Stream existing Parquet files with LitData **without** converting them to LitData chunks — or convert them when you need LitData’s optimized binary format. Hugging Face parquet datasets are covered in [Stream Hugging Face datasets](#stream-hf).
+Stream existing Parquet files with LitData **without** converting them to LitData chunks — or convert them when you need LitData’s optimized binary format. Hugging Face Hub datasets are covered in [Hugging Face Datasets](#huggingface-datasets).
 
 ### Stream vs optimize vs map
 
@@ -1852,7 +1840,7 @@ ld.index_parquet_dataset(
 - Lists **top-level** `.parquet` files only (not recursive subfolders).
 - All files must share the same schema.
 - Supported for indexing today: local, `s3://`, `gs://`, `hf://` (not `r2://` / `azure://` yet).
-- For HF, prefer `index_hf_dataset(uri)` (returns a local cache dir) or auto-index via `StreamingDataset("hf://...")` — see [HF section](#stream-hf).
+- For Hub datasets, use `StreamingDataset("hf://...")` — see [Hugging Face Datasets](#huggingface-datasets).
 
 ### Stream with `ParquetLoader`
 
@@ -1945,6 +1933,8 @@ Using [zstd](https://github.com/facebook/zstd), you can achieve high compression
 | Without | With |
 | -------- | -------- | 
 | 2.8kb | 646b |
+
+`compression="zstd"` (default `compression_level="batch"`, `compression_batch_size=256`) keeps a `.bin` with an uncompressed directory plus zstd frames of 256 items — the same window as Arrow IPC record batches and aligned decode. `compression_level="chunk"` wraps each pytree chunk as one whole-file `.zstd.bin`. `compression_level="sample"` zstd-compresses each item between the pytree offsets. Numeric zstd levels are `compression="zstd:4"`, not `compression_level`. Nested JSON / Hub Arrow IPC still uses Arrow’s own per-batch zstd when you pass `"zstd"`.
 
 
 </details>
@@ -2189,6 +2179,7 @@ export LITDATA_ASYNC_DOWNLOAD_CONCURRENCY=4
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `LITDATA_CACHE_DIR` | `~/.lightning/chunks` | Default chunk cache directory |
+| `LITDATA_ITEM_SHUFFLE_WINDOW` | `256` | In-chunk shuffle block size when `item_shuffle_window` is omitted (`0` = full permute) |
 | `LITDATA_ASYNC_CHUNK_PREFETCH` | on for remote | `0`/`1` force async chunk download overlap |
 | `LITDATA_ASYNC_MIN_PRE_DOWNLOAD` | `4` | Floor for `max_pre_download` when async is on (`0` = no floor) |
 | `LITDATA_ASYNC_DOWNLOAD_CONCURRENCY` | `8` | Max in-flight chunk GETs per gather |
@@ -2623,7 +2614,9 @@ Full knob list for `litdata.optimize` (see Quick start for the minimal recipe). 
 | `chunk_bytes` | `None` | Max bytes per chunk (e.g. `"64MB"`; see [FAQ](#faq-chunk-shuffle) for larger samples) |
 | `chunk_size` | `None` | Max items (or tokens with `TokensLoader`) per chunk |
 | `align_chunking` | `False` | Match single-worker chunk boundaries (needs `chunk_size`; uneven load) |
-| `compression` | `None` | `"zstd"` today |
+| `compression` | `None` | `"zstd"` or `"zstd:N"` (numeric level). Pair with `compression_level` for pytree wrap |
+| `compression_level` | `"batch"` (zstd) | `"batch"` framed `.bin`; `"chunk"` whole-file `.zstd.bin`; `"sample"` per-item zstd |
+| `compression_batch_size` | `256` | Items per frame when `compression_level="batch"` (matches Arrow IPC / decode windows) |
 | `encryption` | `None` | `FernetEncryption` / `RSAEncryption` / custom ([encrypt](#encrypt-decrypt)) |
 | `num_workers` | CPU count | Local workers |
 | `fast_dev_run` | `False` | Smoke a subset of inputs |

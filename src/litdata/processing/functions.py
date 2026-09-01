@@ -36,11 +36,13 @@ from litdata.processing.data_processor import DataChunkRecipe, DataProcessor, Ma
 from litdata.processing.readers import BaseReader
 from litdata.processing.utilities import (
     _get_work_dir,
+    construct_storage_options,
     extract_rank_and_index_from_filename,
     optimize_dns_context,
     read_index_file_content,
 )
 from litdata.streaming.dataloader import StreamingDataLoader
+from litdata.streaming.framed_zstd import is_in_file_compression
 from litdata.streaming.fs_provider import _get_fs_provider
 from litdata.streaming.item_loader import BaseItemLoader
 from litdata.streaming.resolver import (
@@ -199,6 +201,8 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
         chunk_size: int | None,
         chunk_bytes: int | str | None,
         compression: str | None,
+        compression_level: str | None = None,
+        compression_batch_size: int | None = None,
         encryption: Encryption | None = None,
         existing_index: dict[str, Any] | None = None,
         storage_options: dict[str, Any] = {},
@@ -208,6 +212,8 @@ class LambdaDataChunkRecipe(DataChunkRecipe):
             chunk_size=chunk_size,
             chunk_bytes=chunk_bytes,
             compression=compression,
+            compression_level=compression_level,
+            compression_batch_size=compression_batch_size,
             encryption=encryption,
             storage_options=storage_options,
             key_fn=key_fn,
@@ -263,6 +269,8 @@ class QueueDataChunkRecipe(DataChunkRecipe):
         chunk_size: int | None,
         chunk_bytes: int | str | None,
         compression: str | None,
+        compression_level: str | None = None,
+        compression_batch_size: int | None = None,
         encryption: Encryption | None = None,
         existing_index: dict[str, Any] | None = None,
         storage_options: dict[str, Any] = {},
@@ -272,6 +280,8 @@ class QueueDataChunkRecipe(DataChunkRecipe):
             chunk_size=chunk_size,
             chunk_bytes=chunk_bytes,
             compression=compression,
+            compression_level=compression_level,
+            compression_batch_size=compression_batch_size,
             encryption=encryption,
             storage_options=storage_options,
             key_fn=key_fn,
@@ -450,6 +460,8 @@ def optimize(
     chunk_bytes: int | str | None = None,
     align_chunking: bool = False,
     compression: str | None = None,
+    compression_level: str | None = None,
+    compression_batch_size: int | None = None,
     encryption: Encryption | None = None,
     num_workers: int | None = None,
     fast_dev_run: bool = False,
@@ -490,7 +502,13 @@ def optimize(
             and placing all remaining items in the final worker. Each worker will receive chunks of this size,
             except possibly the last worker which may receive a smaller chunk. Note: this will result in uneven
             workload distribution among workers, and last worker may receive more data than others.
-        compression: The compression algorithm to use over the chunks.
+        compression: The compression algorithm to use over the chunks (``"zstd"`` or ``"zstd:N"``).
+        compression_level: Pytree wrap granularity. Omitted ``zstd`` / ``zstd:N`` is
+            ``"batch"`` (framed zstd in ``.bin``). ``"chunk"`` is whole-file ``.zstd.bin``;
+            ``"sample"`` is per-item zstd in ``.bin``. Not the zstd numeric level — use
+            ``compression="zstd:4"`` for that.
+        compression_batch_size: Items per zstd frame when ``compression_level="batch"``.
+            Default is 256 (same as Arrow IPC / decode windows).
         encryption: The encryption algorithm to use over the chunks.
         num_workers: The number of workers to use during processing
         fast_dev_run: Whether to use process only a sub part of the inputs
@@ -591,6 +609,7 @@ def optimize(
             _output_dir = _resolve_dir(output_dir)
 
         _assert_supported_write_url(_output_dir)
+        storage_options = construct_storage_options(storage_options, _output_dir)
 
         if _output_dir.url is not None and "cloudspaces" in _output_dir.url:
             raise ValueError(
@@ -660,6 +679,8 @@ def optimize(
                     chunk_size=chunk_size,
                     chunk_bytes=chunk_bytes,
                     compression=compression,
+                    compression_level=compression_level,
+                    compression_batch_size=compression_batch_size,
                     encryption=encryption,
                     existing_index=existing_index_file_content,
                     storage_options=storage_options,
@@ -673,6 +694,8 @@ def optimize(
                     chunk_size=chunk_size,
                     chunk_bytes=chunk_bytes,
                     compression=compression,
+                    compression_level=compression_level,
+                    compression_batch_size=compression_batch_size,
                     encryption=encryption,
                     existing_index=existing_index_file_content,
                     storage_options=storage_options,
@@ -797,12 +820,16 @@ def merge_datasets(
     copy_infos: list[CopyInfo] = []
     counter = 0
     for input_dir, input_dir_file_content in zip(resolved_input_dirs, input_dirs_file_content):
-        compression = input_dir_file_content["config"]["compression"]  # type: ignore
-        for chunk in input_dir_file_content["chunks"]:  # type: ignore
+        assert input_dir_file_content is not None
+        config = input_dir_file_content["config"]
+        compression = config["compression"]
+        for chunk in input_dir_file_content["chunks"]:
             assert isinstance(chunk, dict)
             old_filename = chunk["filename"]
             new_filename = (
-                f"chunk-0-{counter}.{compression}.bin" if compression is not None else f"chunk-0-{counter}.bin"
+                f"chunk-0-{counter}.{compression}.bin"
+                if compression is not None and not is_in_file_compression(config.get("compression_level"))
+                else f"chunk-0-{counter}.bin"
             )
             copy_infos.append(CopyInfo(input_dir=input_dir, old_filename=old_filename, new_filename=new_filename))
             chunk["filename"] = new_filename
