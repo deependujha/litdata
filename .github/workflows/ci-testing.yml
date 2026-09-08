@@ -17,7 +17,23 @@ defaults:
     shell: bash
 
 jobs:
+  torch-support:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      latest: ${{ steps.policy.outputs.latest }}
+      previous: ${{ steps.policy.outputs.previous }}
+      minimum: ${{ steps.policy.outputs.minimum }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Validate the PyTorch support policy
+        run: python3 .github/scripts/torch_support.py check
+      - name: Export the supported PyTorch versions
+        id: policy
+        run: python3 .github/scripts/torch_support.py export
+
   pytester:
+    needs: torch-support
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -27,6 +43,10 @@ jobs:
         exclude:
           - { os: "windows-2022", python-version: "3.13" }
           - { os: "windows-2022", python-version: "3.14" }
+        # every combination installs the newest PyTorch; this entry merges into the existing
+        # ubuntu-22.04 / 3.12 job (it adds no job) so the previous supported minor is covered too
+        include:
+          - { os: "ubuntu-22.04", python-version: "3.12", torch-version: "${{ needs.torch-support.outputs.previous }}" }
 
     # Timeout: https://stackoverflow.com/a/59076067/4521646
     timeout-minutes: 60
@@ -54,10 +74,14 @@ jobs:
           enable-cache: true
 
       - name: Install package & dependencies
+        env:
+          # empty for the newest release, `torch==X.Y.*` on the previous-minor job
+          TORCH_PIN: ${{ matrix.torch-version && format('torch=={0}.*', matrix.torch-version) || '' }}
         run: |
           uv pip install -U lightning-sdk
-          uv pip install -e ".[extras]" -r requirements/test.txt -U -q
+          uv pip install -e ".[extras]" -r requirements/test.txt ${TORCH_PIN} -U -q
           uv pip list
+          python -c "import torch; print('torch', torch.__version__)"
 
       - name: Run fast tests in parallel
         run: |

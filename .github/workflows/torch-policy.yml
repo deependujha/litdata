@@ -1,0 +1,54 @@
+name: PyTorch support policy
+
+# Keeps .github/torch-support.json in step with PyTorch releases. Regular pull requests are never
+# failed by a fresh PyTorch release; they only validate the policy file (see ci-testing.yml).
+
+on:
+  schedule:
+    # every Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Refresh the policy from PyPI
+        id: bump
+        run: python3 .github/scripts/torch_support.py bump
+
+      - name: Open a bump pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LATEST: ${{ steps.bump.outputs.latest }}
+          PREVIOUS: ${{ steps.bump.outputs.previous }}
+        run: |
+          BRANCH="ci/torch-${LATEST}"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null; then
+            echo "$BRANCH already exists — nothing to do"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$BRANCH"
+          git commit -am "ci: support PyTorch ${LATEST}"
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "ci: support PyTorch ${LATEST}" \
+            --body "PyTorch ${LATEST} is out, so the supported releases become **${LATEST}** and **${PREVIOUS}**.
+
+          The CI matrix and the compatibility note in the README follow \`.github/torch-support.json\`, so this
+          pull request is enough to move both. Review whether \`minimum\` (the \`torch\` lower bound in
+          \`requirements.txt\`) should move as well — that stays a deliberate call.
+
+          Opened by [\`torch-policy.yml\`](.github/workflows/torch-policy.yml). Pull requests created with
+          \`GITHUB_TOKEN\` do not start CI: close and reopen it to get a run."

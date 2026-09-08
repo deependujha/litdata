@@ -90,6 +90,10 @@ First, install LitData:
 pip install litdata
 ```
 
+LitData supports the two most recent PyTorch minor releases — currently **2.14** and **2.13**, both exercised in CI — and
+requires **PyTorch 2.1 or newer**. Those versions are declared in
+[`.github/torch-support.json`](.github/torch-support.json), which drives the CI matrix.
+
 Choose your workflow:
 
 🚀 [Speed up model training](#speed-up-model-training)    

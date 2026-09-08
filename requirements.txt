@@ -1,4 +1,4 @@
-torch >=2.1.0  # minimum supported
+torch >=2.1.0  # minimum supported, see .github/torch-support.json
 torchvision
 lightning-utilities
 filelock
