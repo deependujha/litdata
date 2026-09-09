@@ -46,8 +46,8 @@ jobs:
             --title "ci: support PyTorch ${LATEST}" \
             --body "PyTorch ${LATEST} is out, so the supported releases become **${LATEST}** and **${PREVIOUS}**.
 
-          The CI matrix and the compatibility note in the README follow \`.github/torch-support.json\`, so this
-          pull request is enough to move both. Review whether \`minimum\` (the \`torch\` lower bound in
+          This updates \`.github/torch-support.json\` and the versions the README announces; the CI matrix reads the
+          same file, so nothing else needs touching. Review whether \`minimum\` (the \`torch\` lower bound in
           \`requirements.txt\`) should move as well — that stays a deliberate call.
 
           Opened by [\`torch-policy.yml\`](.github/workflows/torch-policy.yml). Pull requests created with

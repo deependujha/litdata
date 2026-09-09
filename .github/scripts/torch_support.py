@@ -1,9 +1,9 @@
 """Maintain the PyTorch support policy declared in `.github/torch-support.json`.
 
 Subcommands:
-    check   validate the policy file and the ``torch`` lower bound in ``requirements.txt``
+    check   validate the policy against the ``torch`` lower bound in ``requirements.txt`` and the README
     export  publish ``latest`` / ``previous`` / ``minimum`` as step outputs for the CI matrix
-    bump    refresh ``latest`` / ``previous`` from the newest stable release on PyPI
+    bump    refresh ``latest`` / ``previous`` from the newest stable release on PyPI, README included
 """
 
 import argparse
@@ -17,7 +17,12 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parents[2]
 _POLICY_FILE = _ROOT / ".github" / "torch-support.json"
 _REQUIREMENTS_FILE = _ROOT / "requirements.txt"
+_README_FILE = _ROOT / "README.md"
+# the README states the supported versions in the paragraph right after this marker, as the only two
+# bold `**MAJOR.MINOR**` values in it — the wording is free to change, those two are rewritten by `bump`
+_README_MARKER = "<!-- torch-support -->"
 _TORCH_REQUIREMENT = re.compile(r"^torch\s*>=\s*(?P<version>[\w.]+)", re.MULTILINE)
+_README_VERSION = re.compile(r"\*\*(\d+\.\d+)\*\*")
 _MINOR = re.compile(r"^\d+\.\d+$")
 
 
@@ -42,6 +47,32 @@ def _declared_lower_bound() -> str:
     if match is None:
         raise SystemExit(f"no `torch >=...` requirement found in {_REQUIREMENTS_FILE.name}")
     return match.group("version")
+
+
+def _readme_span(text: str) -> tuple:
+    """Return the ``(start, end)`` offsets of the README paragraph that states the supported versions."""
+    start = text.find(_README_MARKER)
+    if start < 0:
+        raise SystemExit(f"no `{_README_MARKER}` marker in {_README_FILE.name}")
+    start += len(_README_MARKER)
+    end = text.find("\n\n", start)
+    return start, len(text) if end < 0 else end
+
+
+def _readme_versions(text: str) -> list:
+    """Return the supported versions the README announces."""
+    start, end = _readme_span(text)
+    return _README_VERSION.findall(text[start:end])
+
+
+def _update_readme(latest: str, previous: str) -> None:
+    """Rewrite the versions the README announces, leaving the wording around them alone."""
+    text = _README_FILE.read_text()
+    start, end = _readme_span(text)
+    replacements = iter((f"**{latest}**", f"**{previous}**"))
+    _README_FILE.write_text(
+        text[:start] + _README_VERSION.sub(lambda _: next(replacements), text[start:end]) + text[end:]
+    )
 
 
 def _latest_on_pypi() -> str:
@@ -86,6 +117,13 @@ def check() -> None:
             " update whichever is wrong"
         )
 
+    announced = _readme_versions(_README_FILE.read_text())
+    if announced != [latest, previous]:
+        errors.append(
+            f"{_README_FILE.name} announces PyTorch {announced} after the `{_README_MARKER}` marker,"
+            f" expected exactly ['{latest}', '{previous}'] as bold `**MAJOR.MINOR**` values"
+        )
+
     if errors:
         raise SystemExit("\n".join(errors))
     print(f"supported PyTorch: {latest} and {previous}, minimum {minimum}")
@@ -110,7 +148,10 @@ def bump() -> None:
     major, minor = (int(part) for part in newest.split("."))
     policy["latest"] = newest
     policy["previous"] = f"{major}.{minor - 1}" if minor else current
+    if len(_readme_versions(_README_FILE.read_text())) != 2:
+        raise SystemExit(f"{_README_FILE.name} must announce exactly two versions, refusing to bump")
     _write_policy(policy)
+    _update_readme(policy["latest"], policy["previous"])
     print(f"bumped: latest {current} -> {policy['latest']}, previous -> {policy['previous']}")
     _emit(changed="true", latest=policy["latest"], previous=policy["previous"])
 
