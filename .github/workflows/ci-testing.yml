@@ -23,9 +23,9 @@ jobs:
     # Keep the supported PyTorch versions in one place and share them with the
     # test matrix so CI fails early when the policy and workflow drift apart.
     outputs:
-      latest: ${{ steps.policy.outputs.latest }}
-      previous: ${{ steps.policy.outputs.previous }}
-      minimum: ${{ steps.policy.outputs.minimum }}
+      latest_pin: ${{ steps.policy.outputs.latest_pin }}
+      previous_pin: ${{ steps.policy.outputs.previous_pin }}
+      minimum_pin: ${{ steps.policy.outputs.minimum_pin }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate the PyTorch support policy
@@ -82,6 +82,7 @@ jobs:
           # the supported PyTorch this job tests, from .github/torch-support.json
           TORCH_PIN: ${{ matrix.torch-pin || needs.torch-support.outputs.latest_pin }}
         run: |
+          test -n "${TORCH_PIN}" || { echo "::error::TORCH_PIN is empty, the torch-support job exported no pin"; exit 1; }
           uv pip install -U lightning-sdk
           uv pip install -e ".[extras]" -r requirements/test.txt "${TORCH_PIN}" -U -q
           uv pip list
