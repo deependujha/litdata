@@ -4,6 +4,7 @@ Subcommands:
     check   validate the policy against the ``torch`` lower bound in ``requirements.txt`` and the README
     export  publish ``latest`` / ``previous`` / ``minimum`` as step outputs for the CI matrix
     bump    refresh ``latest`` / ``previous`` from the newest stable release on PyPI, README included
+            (``--dry-run`` only reports what would change)
 """
 
 import argparse
@@ -135,7 +136,7 @@ def export() -> None:
     _emit(latest=policy["latest"], previous=policy["previous"], minimum=policy["minimum"])
 
 
-def bump() -> None:
+def bump(dry_run: bool = False) -> None:
     """Move the policy forward when PyTorch publishes a newer minor release."""
     policy = _load_policy()
     current, newest = policy["latest"], _latest_on_pypi()
@@ -150,18 +151,24 @@ def bump() -> None:
     policy["previous"] = f"{major}.{minor - 1}" if minor else current
     if len(_readme_versions(_README_FILE.read_text())) != 2:
         raise SystemExit(f"{_README_FILE.name} must announce exactly two versions, refusing to bump")
-    _write_policy(policy)
-    _update_readme(policy["latest"], policy["previous"])
-    print(f"bumped: latest {current} -> {policy['latest']}, previous -> {policy['previous']}")
+    if not dry_run:
+        _write_policy(policy)
+        _update_readme(policy["latest"], policy["previous"])
+    verb = "would bump" if dry_run else "bumped"
+    print(f"{verb}: latest {current} -> {policy['latest']}, previous -> {policy['previous']}")
     _emit(changed="true", latest=policy["latest"], previous=policy["previous"])
 
 
 def main() -> None:
     """Run the requested subcommand."""
-    commands = {"check": check, "export": export, "bump": bump}
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=list(commands))
-    commands[parser.parse_args().command]()
+    parser.add_argument("command", choices=("check", "export", "bump"))
+    parser.add_argument("--dry-run", action="store_true", help="`bump`: report what would change, write nothing")
+    args = parser.parse_args()
+    if args.command == "bump":
+        bump(dry_run=args.dry_run)
+    else:
+        {"check": check, "export": export}[args.command]()
 
 
 if __name__ == "__main__":
