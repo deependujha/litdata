@@ -135,17 +135,15 @@ def check() -> None:
 
 
 def export() -> None:
-    """Publish the supported versions, and the pins that install them, for the CI matrix."""
+    """Publish the version specs the CI matrix installs and names its jobs after."""
     policy = _load_policy()
+    # version specs, installed as `torch==<spec>` and shown in the job names: the two supported
+    # minors track patch releases, while the floor is exact, as that is the one version the
+    # `torch >=` bound in requirements.txt actually promises
     _emit(
-        latest=policy["latest"],
-        previous=policy["previous"],
-        minimum=policy["minimum"],
-        # the two supported minors track patch releases; the floor is pinned exactly, as that is
-        # the one version the `torch >=` bound in requirements.txt actually promises
-        latest_pin=f"torch=={policy['latest']}.*",
-        previous_pin=f"torch=={policy['previous']}.*",
-        minimum_pin=f"torch=={policy['minimum']}",
+        latest_spec=f"{policy['latest']}.*",
+        previous_spec=f"{policy['previous']}.*",
+        minimum_spec=policy["minimum"],
     )
 
 
