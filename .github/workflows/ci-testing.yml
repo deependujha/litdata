@@ -20,6 +20,8 @@ jobs:
   torch-support:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # Keep the supported PyTorch versions in one place and share them with the
+    # test matrix so CI fails early when the policy and workflow drift apart.
     outputs:
       latest: ${{ steps.policy.outputs.latest }}
       previous: ${{ steps.policy.outputs.previous }}
@@ -43,10 +45,12 @@ jobs:
         exclude:
           - { os: "windows-2022", python-version: "3.13" }
           - { os: "windows-2022", python-version: "3.14" }
-        # every combination installs the newest PyTorch; this entry merges into the existing
-        # ubuntu-22.04 / 3.12 job (it adds no job) so the previous supported minor is covered too
+        # every combination tests the `latest` PyTorch from .github/torch-support.json; these entries
+        # merge into existing combinations (they add no jobs), switching two of them to `previous` and
+        # to the declared `minimum` — the floor sits on 3.10 because old torch has no newer wheels
         include:
-          - { os: "ubuntu-22.04", python-version: "3.12", torch-version: "${{ needs.torch-support.outputs.previous }}" }
+          - { os: "ubuntu-22.04", python-version: "3.12", torch-pin: "${{ needs.torch-support.outputs.previous_pin }}" }
+          - { os: "ubuntu-22.04", python-version: "3.10", torch-pin: "${{ needs.torch-support.outputs.minimum_pin }}" }
 
     # Timeout: https://stackoverflow.com/a/59076067/4521646
     timeout-minutes: 60
@@ -75,13 +79,19 @@ jobs:
 
       - name: Install package & dependencies
         env:
-          # empty for the newest release, `torch==X.Y.*` on the previous-minor job
-          TORCH_PIN: ${{ matrix.torch-version && format('torch=={0}.*', matrix.torch-version) || '' }}
+          # the supported PyTorch this job tests, from .github/torch-support.json
+          TORCH_PIN: ${{ matrix.torch-pin || needs.torch-support.outputs.latest_pin }}
         run: |
           uv pip install -U lightning-sdk
-          uv pip install -e ".[extras]" -r requirements/test.txt ${TORCH_PIN} -U -q
+          uv pip install -e ".[extras]" -r requirements/test.txt "${TORCH_PIN}" -U -q
           uv pip list
           python -c "import torch; print('torch', torch.__version__)"
+
+      # torchcodec has no build for the oldest supported torch (it starts at 2.5), and uv installs a
+      # newer one that only fails on import; dropping it lets the video tests skip themselves instead
+      - name: Drop the video stack on the minimum-PyTorch job
+        if: matrix.torch-pin == needs.torch-support.outputs.minimum_pin
+        run: uv pip uninstall torchcodec
 
       - name: Run fast tests in parallel
         run: |

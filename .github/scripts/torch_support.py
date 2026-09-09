@@ -25,6 +25,7 @@ _README_MARKER = "<!-- torch-support -->"
 _TORCH_REQUIREMENT = re.compile(r"^torch\s*>=\s*(?P<version>[\w.]+)", re.MULTILINE)
 _README_VERSION = re.compile(r"\*\*(\d+\.\d+)\*\*")
 _MINOR = re.compile(r"^\d+\.\d+$")
+_PATCH = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 def _load_policy() -> dict:
@@ -102,6 +103,9 @@ def check() -> None:
     for key in ("latest", "previous"):
         if not _MINOR.match(policy[key]):
             errors.append(f"`{key}` must be a MAJOR.MINOR version, got {policy[key]!r}")
+    # `minimum` is installed as an exact pin, so it needs the patch component
+    if not _PATCH.match(policy["minimum"]):
+        errors.append(f"`minimum` must be a MAJOR.MINOR.PATCH version, got {policy['minimum']!r}")
     if errors:
         raise SystemExit("\n".join(errors))
 
@@ -131,9 +135,18 @@ def check() -> None:
 
 
 def export() -> None:
-    """Publish the supported versions so other jobs can build their matrix from them."""
+    """Publish the supported versions, and the pins that install them, for the CI matrix."""
     policy = _load_policy()
-    _emit(latest=policy["latest"], previous=policy["previous"], minimum=policy["minimum"])
+    _emit(
+        latest=policy["latest"],
+        previous=policy["previous"],
+        minimum=policy["minimum"],
+        # the two supported minors track patch releases; the floor is pinned exactly, as that is
+        # the one version the `torch >=` bound in requirements.txt actually promises
+        latest_pin=f"torch=={policy['latest']}.*",
+        previous_pin=f"torch=={policy['previous']}.*",
+        minimum_pin=f"torch=={policy['minimum']}",
+    )
 
 
 def bump(dry_run: bool = False) -> None:
