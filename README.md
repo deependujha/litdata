@@ -82,13 +82,14 @@ Different layers, not competitors: **LitData is a streaming layer with its own o
 | | LitData | torchdata |
 |--|--|--|
 | Storage format | Own chunked binary format via [`optimize()`](#option-2-optimize-for-maximum-performance-); also reads Parquet, MDS, [raw files](#stream-raw) | None. Bring your own |
-| Remote data | Chunk-level streaming from S3, GCS, Azure, R2, HF Hub. Async batched downloads, prefetch, local cache, retries | Per-file reads (`FileLister` / `FileReader`, fsspec + smart_open, on `main`). No chunk cache or prefetch pipeline |
+| Remote data | Chunk-level streaming from S3, GCS, Azure, R2, HF Hub. Async batched downloads, prefetch, local cache, retries | Per-file reads (`FileLister` / `FileReader`, fsspec + smart_open). No chunk cache or prefetch pipeline |
 | Main API | `StreamingDataset` / `StreamingDataLoader`, `CombinedStreamingDataset` | `torchdata.nodes` iterators you chain yourself, `StatefulDataLoader` |
 | Mid-epoch resume | `StreamingDataLoader.state_dict()` / `load_state_dict()` | `StatefulDataLoader.state_dict()` / `load_state_dict()` |
-| Transforms | [`map()`](#transform-datasets) / `optimize()`. Offline jobs that materialize a new dataset, distributed across machines | `ParallelMapper`. Applies a function inside the live pipeline |
-| Best for | Datasets too large for local disk, millions of small files, multi-node training | Custom pipelines over data you already have locally |
+| Transforms | [`map()`](#transform-datasets) / `optimize()`. Preprocessing jobs that run before training and write a new dataset, distributed across machines | `ParallelMapper`. Transforms samples in the live pipeline, re-run every epoch |
 
-They compose rather than compete: a `StreamingDataset` is an `IterableDataset`, so `torchdata.nodes.IterableWrapper` can pull straight from it.
+**Rule of thumb:** reach for **LitData** in most cases. It handles the streaming, caching, shuffling and resume for you. Reach for **torchdata** when you only want bare-bones primitives and are happy to build the loading pipeline yourself.
+
+The two compose rather than compete: a `StreamingDataset` is an `IterableDataset`, so `torchdata.nodes.IterableWrapper` can pull straight from it.
 
 &nbsp;
 
