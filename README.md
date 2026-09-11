@@ -75,7 +75,7 @@ LitData provides tools to preprocess and optimize datasets into a format that st
 
 &nbsp;
 
-# LitData vs torchdata <a id="litdata-vs-torchdata"></a>
+## LitData vs torchdata <a id="litdata-vs-torchdata"></a>
 
 Different layers, not competitors: **LitData is an optimize-then-stream system with its own on-disk format; [torchdata](https://github.com/meta-pytorch/data) is a toolkit of dataloading primitives with no format of its own.**
 
