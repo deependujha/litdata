@@ -81,7 +81,7 @@ Different layers, not competitors: **LitData is an optimize-then-stream system w
 
 | | LitData | torchdata |
 |--|--|--|
-| Storage format | Own chunked binary format via [`optimize()`](#option-2-optimize-for-maximum-performance-); also reads Parquet, MDS, [raw files](#stream-raw) | None. Bring your own |
+gpu| Storage format | Own chunked binary format via [`optimize()`](#option-2-optimize-for-maximum-performance-); also reads Parquet, MDS, [raw files](#stream-raw) | None. Bring your own |
 | Cloud streaming | Built in: S3, GCS, Azure, R2, HF Hub. Async batched downloads, cache, `mmap` | Not included |
 | Main API | `StreamingDataset` / `StreamingDataLoader`, `CombinedStreamingDataset` | `torchdata.nodes` iterators you chain yourself, `StatefulDataLoader` |
 | Mid-epoch resume | `state_dict()` | `state_dict()` |
