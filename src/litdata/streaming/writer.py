@@ -78,10 +78,7 @@ def _config_body(config: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in config.items() if key != "types"}
 
 
-_MEDIA_FORMAT_KEYS = frozenset(_MEDIA_KINDS.values()) | {
-    "no_header_tensor",
-    "no_header_numpy",
-}
+_MEDIA_FORMAT_KEYS = frozenset(_MEDIA_KINDS.values()) | {"no_header_tensor", "no_header_numpy"}
 # Hub JPEG/WAV barely compress; treating them as 3× zstd packed first shards to 140–188MB.
 _BINARY_HEAVY_RATIO = 0.6
 
@@ -304,22 +301,18 @@ class BinaryWriter:
         if self._data_format is None and self._checkpoint_config is not None:
             return copy.deepcopy(self._checkpoint_config)
         return {
-            "compression": (
-                self._compression
-                if (self._file_compression_used or self._framed_compression_used or not self._chunks_info)
-                else None
-            ),
-            "compression_level": (
-                self._compression_level
-                if self._framed_compression_used and self._compression_level != "chunk"
-                else None
-            ),
+            "compression": self._compression
+            if (self._file_compression_used or self._framed_compression_used or not self._chunks_info)
+            else None,
+            "compression_level": self._compression_level
+            if self._framed_compression_used and self._compression_level != "chunk"
+            else None,
             "compression_batch_size": (
                 self._resolved_batch_size()
                 if self._framed_compression_used and self._compression_level == "batch"
                 else None
             ),
-            "ipc_compression": (self._ipc_codec() if self._ipc_compression_used else None),
+            "ipc_compression": self._ipc_codec() if self._ipc_compression_used else None,
             "chunk_size": self._chunk_size,
             "chunk_bytes": self._chunk_bytes,
             "data_format": self._data_format,
@@ -867,15 +860,7 @@ class BinaryWriter:
             dest = os.path.join(self._cache_dir, _INDEX_FILENAME)
             tmp = dest + ".tmp"
             with open(tmp, "w") as f:
-                json.dump(
-                    {
-                        "chunks": chunks_info,
-                        "config": config,
-                        "updated_at": str(time()),
-                    },
-                    f,
-                    sort_keys=True,
-                )
+                json.dump({"chunks": chunks_info, "config": config, "updated_at": str(time())}, f, sort_keys=True)
             os.replace(tmp, dest)
         else:
             with open(os.path.join(self._cache_dir, f"{node_rank}-{_INDEX_FILENAME}"), "w") as f:

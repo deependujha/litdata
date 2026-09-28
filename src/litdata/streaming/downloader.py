@@ -144,11 +144,7 @@ async def _obstore_astream_resp_to_tmp(tmp_path: str, resp: Any) -> None:
 
 
 async def _obstore_adownload_file(
-    downloader: "Downloader",
-    store: Any,
-    key: str,
-    local_filepath: str,
-    size_hint: int = 0,
+    downloader: "Downloader", store: Any, key: str, local_filepath: str, size_hint: int = 0
 ) -> None:
     """Stream an object to ``local_filepath`` (prefer this over :meth:`Downloader.adownload_fileobj`)."""
     import obstore as obs
@@ -167,10 +163,7 @@ async def _obstore_adownload_file(
                 downloader._publish_file(tmp_path, local_filepath)
                 return
             except Exception:
-                logger.debug(
-                    "obstore get_ranges_async failed; falling back to get",
-                    exc_info=True,
-                )
+                logger.debug("obstore get_ranges_async failed; falling back to get", exc_info=True)
         resp = await obs.get_async(store, key)
         await _obstore_astream_resp_to_tmp(tmp_path, resp)
         downloader._publish_file(tmp_path, local_filepath)
@@ -413,10 +406,7 @@ class Downloader(ABC):
 
     def _increment_local_lock(self, chunkpath: str, chunk_index: int) -> None:
         countpath = chunkpath + ".cnt"
-        with (
-            suppress(Timeout, FileNotFoundError),
-            FileLock(countpath + ".lock", timeout=1),
-        ):
+        with suppress(Timeout, FileNotFoundError), FileLock(countpath + ".lock", timeout=1):
             try:
                 with open(countpath) as count_f:
                     curr_count = int(count_f.read().strip())
@@ -424,23 +414,9 @@ class Downloader(ABC):
                 curr_count = 0
             curr_count += 1
             with open(countpath, "w+") as count_f:
-                emit_trace(
-                    "lock",
-                    "B",
-                    CAT_LOCK,
-                    op="increment",
-                    chunk=chunk_index,
-                    count=curr_count,
-                )
+                emit_trace("lock", "B", CAT_LOCK, op="increment", chunk=chunk_index, count=curr_count)
                 count_f.write(str(curr_count))
-                emit_trace(
-                    "lock",
-                    "E",
-                    CAT_LOCK,
-                    op="increment",
-                    chunk=chunk_index,
-                    count=curr_count,
-                )
+                emit_trace("lock", "E", CAT_LOCK, op="increment", chunk=chunk_index, count=curr_count)
 
     def download_chunk_from_index(self, chunk_index: int) -> None:
         emit_trace("download", "B", CAT_DOWNLOAD, chunk=chunk_index)
@@ -591,10 +567,7 @@ class S3Downloader(Downloader):
 
         with (
             suppress(Timeout, FileNotFoundError),
-            FileLock(
-                local_filepath + ".lock",
-                timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0,
-            ),
+            FileLock(local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0),
         ):
             if os.path.exists(local_filepath):
                 return
@@ -713,10 +686,7 @@ class R2Downloader(Downloader):
         super().__init__(remote_dir, cache_dir, chunks, storage_options)
         # check if kwargs contains session_options
         self.session_options = kwargs.get("session_options", {})
-        self._client = R2Client(
-            storage_options=dict(self._storage_options),
-            session_options=self.session_options,
-        )
+        self._client = R2Client(storage_options=dict(self._storage_options), session_options=self.session_options)
 
     def download_file(self, remote_filepath: str, local_filepath: str) -> None:
         obj = parse.urlparse(remote_filepath)
@@ -729,10 +699,7 @@ class R2Downloader(Downloader):
 
         with (
             suppress(Timeout, FileNotFoundError),
-            FileLock(
-                local_filepath + ".lock",
-                timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0,
-            ),
+            FileLock(local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0),
         ):
             if os.path.exists(local_filepath):
                 return
@@ -750,12 +717,7 @@ class R2Downloader(Downloader):
                         shutil.copyfileobj(resp["Body"], handle, length=1024 * 1024)
                 elif _use_obstore_for_s3_key(obj.path):
                     store = self._get_store(obj.netloc)
-                    _obstore_get_to_tmp(
-                        store,
-                        key,
-                        tmp_path,
-                        _indexed_object_bytes(self._chunks, obj.path),
-                    )
+                    _obstore_get_to_tmp(store, key, tmp_path, _indexed_object_bytes(self._chunks, obj.path))
                 else:
                     from boto3.s3.transfer import TransferConfig
 
@@ -893,10 +855,7 @@ class GCPDownloader(Downloader):
 
         with (
             suppress(Timeout, FileNotFoundError),
-            FileLock(
-                local_filepath + ".lock",
-                timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0,
-            ),
+            FileLock(local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0),
         ):
             if os.path.exists(local_filepath):
                 return
@@ -1025,10 +984,7 @@ class AzureDownloader(Downloader):
 
         with (
             suppress(Timeout, FileNotFoundError),
-            FileLock(
-                local_filepath + ".lock",
-                timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0,
-            ),
+            FileLock(local_filepath + ".lock", timeout=1 if obj.path.endswith(_INDEX_FILENAME) else 0),
         ):
             if os.path.exists(local_filepath):
                 return
@@ -1287,13 +1243,7 @@ def get_downloader(
     """
     for k, cls in _DOWNLOADERS.items():
         if str(remote_dir).startswith(k):
-            return cls(
-                remote_dir,
-                cache_dir,
-                chunks,
-                storage_options,
-                session_options=session_options,
-            )
+            return cls(remote_dir, cache_dir, chunks, storage_options, session_options=session_options)
     else:
         # Default to LocalDownloader if no prefix is matched
         return LocalDownloader(remote_dir, cache_dir, chunks, storage_options)

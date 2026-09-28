@@ -276,8 +276,7 @@ def _fetch_temp_bucket_credentials(data_connection_id: str) -> dict[str, Any]:
     # would otherwise surface as a JSONDecodeError with nothing pointing back at the login call.
     if response.status_code != 200:
         raise _credentials_error(
-            response.status_code,
-            f"Failed to log in to the Lightning Cloud API: {response.status_code}",
+            response.status_code, f"Failed to log in to the Lightning Cloud API: {response.status_code}"
         )
 
     try:
@@ -298,8 +297,7 @@ def _fetch_temp_bucket_credentials(data_connection_id: str) -> dict[str, Any]:
 
     if credentials_response.status_code != 200:
         raise _credentials_error(
-            credentials_response.status_code,
-            f"Failed to get credentials: {credentials_response.status_code}",
+            credentials_response.status_code, f"Failed to get credentials: {credentials_response.status_code}"
         )
 
     return credentials_response.json()
@@ -654,7 +652,4 @@ class R2Client(S3Client):
         )
         if cache_default_client:
             with _temp_creds_lock_for_pid():
-                _temp_creds_boto_clients[data_connection_id] = (
-                    self._creds_fetched_at or time(),
-                    self._client,
-                )
+                _temp_creds_boto_clients[data_connection_id] = (self._creds_fetched_at or time(), self._client)

@@ -28,12 +28,7 @@ from litdata.exceptions import ChunkWaitTimeoutError
 from litdata.streaming.compression import _COMPRESSORS, Compressor
 from litdata.streaming.downloader import get_downloader
 from litdata.streaming.framed_zstd import is_in_file_compression
-from litdata.streaming.item_loader import (
-    BaseItemLoader,
-    Interval,
-    PyTreeLoader,
-    TokensLoader,
-)
+from litdata.streaming.item_loader import BaseItemLoader, Interval, PyTreeLoader, TokensLoader
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer
 from litdata.utilities._pytree import tree_unflatten, treespec_loads
@@ -108,11 +103,7 @@ class ChunksConfig:
 
         if remote_dir:
             self._downloader = get_downloader(
-                remote_dir,
-                cache_dir,
-                self._chunks,
-                self._storage_options,
-                self._session_options,
+                remote_dir, cache_dir, self._chunks, self._storage_options, self._session_options
             )
             self._downloader._on_file_published = self.notify_file_published
 
@@ -205,23 +196,9 @@ class ChunksConfig:
                     remove_lock = True
                 else:
                     with open(countpath, "w+") as count_f:
-                        emit_trace(
-                            "lock",
-                            "B",
-                            CAT_LOCK,
-                            op="decrement",
-                            chunk=chunk_index,
-                            count=curr_count,
-                        )
+                        emit_trace("lock", "B", CAT_LOCK, op="decrement", chunk=chunk_index, count=curr_count)
                         count_f.write(str(curr_count))
-                        emit_trace(
-                            "lock",
-                            "E",
-                            CAT_LOCK,
-                            op="decrement",
-                            chunk=chunk_index,
-                            count=curr_count,
-                        )
+                        emit_trace("lock", "E", CAT_LOCK, op="decrement", chunk=chunk_index, count=curr_count)
             else:
                 remove_lock = True
         # FileLock doesn't delete its lock file on release — we clean it up manually.
@@ -263,8 +240,7 @@ class ChunksConfig:
                 # We don't want to redownload the base, but we should mark
                 # it as having been requested by something
                 self._downloader._increment_local_lock(
-                    local_chunkpath.replace(f".{self._compressor_name}", ""),
-                    chunk_index,
+                    local_chunkpath.replace(f".{self._compressor_name}", ""), chunk_index
                 )
             return
 
