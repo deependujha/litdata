@@ -10,11 +10,19 @@ from typing import Any
 
 import numpy as np
 
-from litdata.constants import _DEFAULT_CACHE_DIR, _DEFAULT_LIGHTNING_CACHE_DIR, _INDEX_FILENAME, _LITDATA_CACHE_DIR
+from litdata.constants import (
+    _DEFAULT_CACHE_DIR,
+    _DEFAULT_LIGHTNING_CACHE_DIR,
+    _INDEX_FILENAME,
+    _LITDATA_CACHE_DIR,
+)
 from litdata.streaming.downloader import get_downloader
 from litdata.streaming.item_loader import BaseItemLoader, TokensLoader
 from litdata.streaming.resolver import Dir, _resolve_dir
-from litdata.utilities.subsample import shuffle_lists_together, subsample_filenames_and_roi
+from litdata.utilities.subsample import (
+    shuffle_lists_together,
+    subsample_filenames_and_roi,
+)
 
 
 def _looks_like_parquet_dir(path: str | None, fnmatch_pattern: str | None) -> bool:
@@ -57,7 +65,7 @@ def subsample_streaming_dataset(
     subsample: float = 1.0,
     shuffle: bool = False,
     seed: int = 42,
-    storage_options: dict | None = {},
+    storage_options: dict | None = None,
     session_options: dict | None = {},
     index_path: str | None = None,
     fnmatch_pattern: str | None = None,
@@ -105,7 +113,13 @@ def subsample_streaming_dataset(
             if hasattr(input_dir, "data_connection_id") and input_dir.data_connection_id:
                 merged_storage_options["data_connection_id"] = input_dir.data_connection_id
 
-            downloader = get_downloader(input_dir.url, input_dir.path, [], merged_storage_options, session_options)
+            downloader = get_downloader(
+                input_dir.url,
+                input_dir.path,
+                [],
+                merged_storage_options,
+                session_options,
+            )
             downloader.download_file(os.path.join(input_dir.url, _INDEX_FILENAME), cache_index_filepath)
 
     def path_exists(p: str) -> bool:
@@ -229,7 +243,7 @@ def _should_replace_path_filestores(path: str | None) -> bool:
 
 def _read_updated_at(
     input_dir: Dir | None,
-    storage_options: dict | None = {},
+    storage_options: dict | None = None,
     session_options: dict | None = {},
     index_path: str | None = None,
 ) -> str:
@@ -312,7 +326,7 @@ def get_default_cache_dir() -> str:
 def _try_create_cache_dir(
     input_dir: str | None,
     cache_dir: str | None = None,
-    storage_options: dict | None = {},
+    storage_options: dict | None = None,
     session_options: dict | None = {},
     index_path: str | None = None,
 ) -> str | None:

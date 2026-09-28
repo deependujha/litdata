@@ -48,7 +48,7 @@ class Cache:
         max_cache_size: int | float | str | None = None,
         serializers: dict[str, Serializer] | None = None,
         writer_chunk_index: int | None = None,
-        storage_options: dict | None = {},
+        storage_options: dict | None = None,
         session_options: dict | None = {},
         max_pre_download: int = 2,
         msg_queue: "Queue | None" = None,

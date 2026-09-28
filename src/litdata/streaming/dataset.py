@@ -38,11 +38,21 @@ from litdata.streaming.elastic import (
     worker_plan_to_chunks,
 )
 from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader
-from litdata.streaming.posix_fast import PosixFastProfile, detect_posix_fast, posix_fast_supports_config
+from litdata.streaming.posix_fast import (
+    PosixFastProfile,
+    detect_posix_fast,
+    posix_fast_supports_config,
+)
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
-from litdata.streaming.shuffle import FullShuffle, NoShuffle, Shuffle, WindowShuffle, resolve_item_shuffle_window
+from litdata.streaming.shuffle import (
+    FullShuffle,
+    NoShuffle,
+    Shuffle,
+    WindowShuffle,
+    resolve_item_shuffle_window,
+)
 from litdata.utilities.dataset_utilities import (
     _should_replace_path,
     _should_replace_path_filestores,
@@ -51,7 +61,11 @@ from litdata.utilities.dataset_utilities import (
 )
 from litdata.utilities.encryption import Encryption
 from litdata.utilities.env import _DistributedEnv, _is_in_dataloader_worker, _WorkerEnv
-from litdata.utilities.format import _convert_bytes_to_int, _is_absolute_cache_size, _parse_max_cache_size
+from litdata.utilities.format import (
+    _convert_bytes_to_int,
+    _is_absolute_cache_size,
+    _parse_max_cache_size,
+)
 from litdata.utilities.hf_dataset import index_hf_dataset
 from litdata.utilities.shuffle import _get_shared_chunks
 
@@ -73,7 +87,7 @@ class StreamingDataset(IterableDataset):
         max_cache_size: int | float | str | None = None,
         subsample: float = 1.0,
         encryption: Encryption | None = None,
-        storage_options: dict | None = {},
+        storage_options: dict | None = None,
         session_options: dict | None = {},
         max_pre_download: int = 2,
         index_path: str | None = None,
@@ -335,7 +349,7 @@ class StreamingDataset(IterableDataset):
         skip_copy = self.posix_fast is not None and self.posix_fast.skip_cache_copy
         if not skip_copy and _should_replace_path(self.input_dir.path):
             cache_path = _try_create_cache_dir(
-                input_dir=self.input_dir.path if self.input_dir.path else self.input_dir.url,
+                input_dir=(self.input_dir.path if self.input_dir.path else self.input_dir.url),
                 cache_dir=self.cache_dir.path,
             )
             if cache_path is not None:
@@ -361,7 +375,7 @@ class StreamingDataset(IterableDataset):
             is_compressed = config and config._compressor is not None
             if is_compressed:
                 cache_path = _try_create_cache_dir(
-                    input_dir=self.input_dir.path if self.input_dir.path else self.input_dir.url,
+                    input_dir=(self.input_dir.path if self.input_dir.path else self.input_dir.url),
                 )
                 if cache_path is not None:
                     self.input_dir.url = self.input_dir.path
@@ -406,7 +420,9 @@ class StreamingDataset(IterableDataset):
         if self.posix_fast is not None and self.posix_fast.in_place and cache._reader._config is not None:
             chunks = cache._reader._config._chunks or []
             cache._reader.enable_posix_fast(
-                list(range(len(chunks))), keep=max(4, self.max_pre_download), prefetch=False
+                list(range(len(chunks))),
+                keep=max(4, self.max_pre_download),
+                prefetch=False,
             )
 
         return cache
@@ -460,7 +476,12 @@ class StreamingDataset(IterableDataset):
         assert self.cache is not None
         assert self.shuffler is not None
         state = self._state_dict or {}
-        init_world = int(state.get("initial_world_size", state.get("world_size", self.distributed_env.world_size)))
+        init_world = int(
+            state.get(
+                "initial_world_size",
+                state.get("world_size", self.distributed_env.world_size),
+            )
+        )
         init_nw = int(state.get("initial_num_workers", state.get("num_workers", num_workers)))
         init_bs = int(state.get("initial_batch_size", state.get("batch_size", batch_size)))
         init_world = max(1, init_world)
@@ -487,7 +508,12 @@ class StreamingDataset(IterableDataset):
             seq: list[tuple[int, int]] = []
             for chunk_i, interval in enumerate(wintervals):
                 chunk_index = int(wchunks[chunk_i])
-                items = self.shuffler(np.arange(interval[1], interval[2]), n_chunks, self.current_epoch, chunk_index)
+                items = self.shuffler(
+                    np.arange(interval[1], interval[2]),
+                    n_chunks,
+                    self.current_epoch,
+                    chunk_index,
+                )
                 seq.extend((chunk_index, int(item)) for item in items)
             seqs.append(seq)
         if seqs:
@@ -552,7 +578,10 @@ class StreamingDataset(IterableDataset):
             workers_chunks = self._setup_elastic_resume(replay_workers=bool(self._state_dict) and same_topology)
         else:
             workers_chunks, workers_intervals = self.shuffler.get_chunks_and_intervals_per_workers(
-                self.distributed_env, self.worker_env.world_size, self.batch_size, self.current_epoch
+                self.distributed_env,
+                self.worker_env.world_size,
+                self.batch_size,
+                self.current_epoch,
             )
 
             worker_rank = self.distributed_env.global_rank * self.worker_env.world_size + self.worker_env.rank
@@ -755,7 +784,9 @@ class StreamingDataset(IterableDataset):
         self.num_chunks = len(self.worker_chunks)
         if replay_workers and state:
             indexes = _replay_sampling(
-                local_yielded, int(state.get("batch_size", self.batch_size)), self.worker_env.world_size
+                local_yielded,
+                int(state.get("batch_size", self.batch_size)),
+                self.worker_env.world_size,
             )
             self._skip_elastic_worker_prefix(indexes.get(self.worker_env.rank, 0))
         if drop_first:
@@ -1153,7 +1184,7 @@ class StreamingDataset(IterableDataset):
         # In this case, validate the cache folder is the same.
         if _should_replace_path(state["input_dir_path"]):
             cache_path = _try_create_cache_dir(
-                input_dir=state["input_dir_path"] if state["input_dir_path"] else state["input_dir_url"],
+                input_dir=(state["input_dir_path"] if state["input_dir_path"] else state["input_dir_url"]),
                 cache_dir=state.get("cache_dir_path"),
             )
             if cache_path != self.input_dir.path:

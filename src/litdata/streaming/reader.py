@@ -38,8 +38,18 @@ from litdata.streaming.async_prefetch import (
     download_chunk_indexes_concurrently,
 )
 from litdata.streaming.config import ChunksConfig, Interval
-from litdata.streaming.item_loader import BaseItemLoader, ParquetLoader, PyTreeLoader, TokensLoader
-from litdata.streaming.posix_fast import advise_willneed, mean_chunk_bytes, posix_prefetch_fits_ram, posix_safe_keep
+from litdata.streaming.item_loader import (
+    BaseItemLoader,
+    ParquetLoader,
+    PyTreeLoader,
+    TokensLoader,
+)
+from litdata.streaming.posix_fast import (
+    advise_willneed,
+    mean_chunk_bytes,
+    posix_prefetch_fits_ram,
+    posix_safe_keep,
+)
 from litdata.streaming.sampler import ChunkedIndex
 from litdata.streaming.serializers import Serializer, _get_serializers
 from litdata.streaming.timing import StreamingTimingStats
@@ -146,7 +156,13 @@ class PrepareChunksThread(Thread):
         """How many queued chunk indexes to download together."""
         if not self._async_prefetch():
             return 1
-        return max(1, min(self._max_pre_download, async_download_concurrency(self._max_pre_download)))
+        return max(
+            1,
+            min(
+                self._max_pre_download,
+                async_download_concurrency(self._max_pre_download),
+            ),
+        )
 
     def _free_prefetch_slots(self) -> int:
         return max(0, self._max_pre_download - self._pre_download_counter)
@@ -784,7 +800,7 @@ class BinaryReader:
         encryption: Encryption | None = None,
         item_loader: BaseItemLoader | None = None,
         serializers: dict[str, Serializer] | None = None,
-        storage_options: dict | None = {},
+        storage_options: dict | None = None,
         session_options: dict | None = {},
         max_pre_download: int = 2,
         on_demand_bytes: bool = False,
@@ -1048,7 +1064,12 @@ class BinaryReader:
                 pytree_loader = self._item_loader
                 assert isinstance(pytree_loader, PyTreeLoader)
                 item = pytree_loader.load_item_from_chunk(
-                    index.index, index.chunk_index, chunk_filepath, begin, filesize_bytes, self._encryption
+                    index.index,
+                    index.chunk_index,
+                    chunk_filepath,
+                    begin,
+                    filesize_bytes,
+                    self._encryption,
                 )
         else:
             self.setup_thread_and_download_chunk(index)
@@ -1073,7 +1094,13 @@ class BinaryReader:
 
         if index.chunk_index != self._last_chunk_index:
             if self._last_chunk_index is not None:
-                emit_trace("read", "E", CAT_READ, chunk=self._last_chunk_index, size=self._last_chunk_size)
+                emit_trace(
+                    "read",
+                    "E",
+                    CAT_READ,
+                    chunk=self._last_chunk_index,
+                    size=self._last_chunk_size,
+                )
 
             emit_trace("read", "B", CAT_READ, chunk=index.chunk_index, size=index.chunk_size)
 
@@ -1090,7 +1117,13 @@ class BinaryReader:
 
         if index.is_last_index and self._prepare_thread:
             if self._last_chunk_index is not None:
-                emit_trace("read", "E", CAT_READ, chunk=self._last_chunk_index, size=self._last_chunk_size)
+                emit_trace(
+                    "read",
+                    "E",
+                    CAT_READ,
+                    chunk=self._last_chunk_index,
+                    size=self._last_chunk_size,
+                )
 
             # Close the item loader's handle on the last chunk before requesting
             # deletion.  On Windows, os.remove fails if the file is still open.

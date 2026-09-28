@@ -278,7 +278,9 @@ def _ipc_is_file(ipc: bytes | bytearray | memoryview) -> bool:
     return bytes(ipc[:6]) == _ARROW_IPC_FILE_MAGIC
 
 
-def open_arrow_footer_reader(view: bytes | bytearray | memoryview) -> tuple[Any, bool] | None:
+def open_arrow_footer_reader(
+    view: bytes | bytearray | memoryview,
+) -> tuple[Any, bool] | None:
     """Return ``(reader, is_file)`` for a trailing Arrow IPC blob, or ``None``.
 
     New chunks are IPC *files* (``open_file``). Older stream footers keep
@@ -1052,7 +1054,13 @@ class PyTreeLoader(BaseItemLoader):
             rows[i] = deserialize(inflate(view[offsets[idx] : offsets[idx + 1]]))
         return rows
 
-    def _store_decode_window(self, chunk_index: int, start: int, rows: list[Any], table_idx: int | None = None) -> Any:
+    def _store_decode_window(
+        self,
+        chunk_index: int,
+        start: int,
+        rows: list[Any],
+        table_idx: int | None = None,
+    ) -> Any:
         self._chunk_rows = rows
         self._chunk_rows_index = chunk_index
         self._win_start = start
@@ -1102,7 +1110,11 @@ class PyTreeLoader(BaseItemLoader):
         return self._store_decode_window(chunk_index, start, rows, table_idx)
 
     def _load_encrypted_data(
-        self, chunk_filepath: str, chunk_index: int, offset: int, encryption: Encryption | None
+        self,
+        chunk_filepath: str,
+        chunk_index: int,
+        offset: int,
+        encryption: Encryption | None,
     ) -> bytes:
         """Load and decrypt data from chunk based on the encryption configuration."""
         # Validate the provided encryption object against the expected configuration.
@@ -1765,7 +1777,7 @@ class ParquetLoader(BaseItemLoader):
             )
 
         self._remote_dir: str | None = None
-        self._storage_options: dict | None = {}
+        self._storage_options: dict | None = None
 
     def setup(
         self,

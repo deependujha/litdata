@@ -11,10 +11,20 @@ from time import time
 from typing import Any
 from urllib import parse
 
-from litdata.constants import _FSSPEC_AVAILABLE, _HF_HUB_AVAILABLE, _INDEX_FILENAME, _PYARROW_AVAILABLE
+from litdata.constants import (
+    _FSSPEC_AVAILABLE,
+    _HF_HUB_AVAILABLE,
+    _INDEX_FILENAME,
+    _PYARROW_AVAILABLE,
+)
 from litdata.streaming.resolver import Dir, _resolve_dir
 from litdata.utilities.env import _DistributedEnv
-from litdata.utilities.hf_fs import get_hf_filesystem, hf_relative_name, list_hf_parquet_files, open_hf_parquet
+from litdata.utilities.hf_fs import (
+    get_hf_filesystem,
+    hf_relative_name,
+    list_hf_parquet_files,
+    open_hf_parquet,
+)
 
 # Re-export for tests / callers that imported the private helpers.
 _hf_relative_name = hf_relative_name
@@ -83,7 +93,7 @@ class LocalParquetDir(ParquetDir):
         self,
         dir_path: str | Dir | None,
         cache_path: str | None = None,
-        storage_options: dict | None = {},
+        storage_options: dict | None = None,
         num_workers: int = 4,
     ):
         if not _PYARROW_AVAILABLE:
@@ -137,7 +147,8 @@ class CloudParquetDir(ParquetDir):
     ):
         if not _FSSPEC_AVAILABLE:
             raise ModuleNotFoundError(
-                "Support for Indexing cloud parquet files depends on `fsspec`.", "Please, run: `pip install fsspec`"
+                "Support for Indexing cloud parquet files depends on `fsspec`.",
+                "Please, run: `pip install fsspec`",
             )
         if not _PYARROW_AVAILABLE:
             raise ModuleNotFoundError(
@@ -212,7 +223,11 @@ class CloudParquetDir(ParquetDir):
 
             # write to index.json file
             with open(index_file_path, "w") as f:
-                data = {"chunks": chunks_info, "config": config, "updated_at": str(time())}
+                data = {
+                    "chunks": chunks_info,
+                    "config": config,
+                    "updated_at": str(time()),
+                }
                 json.dump(data, f, sort_keys=True)
 
             env = _DistributedEnv.detect()
@@ -237,7 +252,8 @@ class HFParquetDir(ParquetDir):
     ):
         if not _HF_HUB_AVAILABLE:
             raise ModuleNotFoundError(
-                "Support for Indexing HF depends on `huggingface_hub`.", "Please, run: `pip install huggingface_hub"
+                "Support for Indexing HF depends on `huggingface_hub`.",
+                "Please, run: `pip install huggingface_hub",
             )
         if not _PYARROW_AVAILABLE:
             raise ModuleNotFoundError(
@@ -307,7 +323,7 @@ class HFParquetDir(ParquetDir):
 def get_parquet_indexer_cls(
     dir_path: str,
     cache_path: str | None = None,
-    storage_options: dict | None = {},
+    storage_options: dict | None = None,
     num_workers: int = 4,
 ) -> ParquetDir:
     """Get the appropriate ParquetDir class based on the directory path scheme.
