@@ -1235,8 +1235,8 @@ def get_downloader(
         remote_dir (str): The remote directory URL.
         cache_dir (str): The local cache directory.
         chunks (List[Dict[str, Any]]): List of chunks to managed by the downloader.
-        storage_options (Optional[Dict], optional): Additional storage options. Defaults to {}.
-        session_options (Optional[Dict], optional): Additional S3 session options. Defaults to {}.
+        storage_options (Optional[Dict], optional): Additional storage options. Defaults to None.
+        session_options (Optional[Dict], optional): Additional S3 session options. Defaults to None.
 
     Returns:
         Downloader: An instance of the appropriate downloader class.
