@@ -58,7 +58,7 @@ def subsample_streaming_dataset(
     shuffle: bool = False,
     seed: int = 42,
     storage_options: dict | None = None,
-    session_options: dict | None = {},
+    session_options: dict | None = None,
     index_path: str | None = None,
     fnmatch_pattern: str | None = None,
 ) -> tuple[list[str], list[tuple[int, int]]]:
@@ -230,7 +230,7 @@ def _should_replace_path_filestores(path: str | None) -> bool:
 def _read_updated_at(
     input_dir: Dir | None,
     storage_options: dict | None = None,
-    session_options: dict | None = {},
+    session_options: dict | None = None,
     index_path: str | None = None,
 ) -> str:
     """Read last updated timestamp from index.json file."""
@@ -313,7 +313,7 @@ def _try_create_cache_dir(
     input_dir: str | None,
     cache_dir: str | None = None,
     storage_options: dict | None = None,
-    session_options: dict | None = {},
+    session_options: dict | None = None,
     index_path: str | None = None,
 ) -> str | None:
     """Prepare and return the cache directory for a dataset."""

@@ -785,7 +785,7 @@ class BinaryReader:
         item_loader: BaseItemLoader | None = None,
         serializers: dict[str, Serializer] | None = None,
         storage_options: dict | None = None,
-        session_options: dict | None = {},
+        session_options: dict | None = None,
         max_pre_download: int = 2,
         on_demand_bytes: bool = False,
     ) -> None:

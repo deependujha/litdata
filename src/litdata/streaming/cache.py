@@ -49,7 +49,7 @@ class Cache:
         serializers: dict[str, Serializer] | None = None,
         writer_chunk_index: int | None = None,
         storage_options: dict | None = None,
-        session_options: dict | None = {},
+        session_options: dict | None = None,
         max_pre_download: int = 2,
         msg_queue: "Queue | None" = None,
         on_demand_bytes: bool = False,

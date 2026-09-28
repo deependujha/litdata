@@ -47,7 +47,7 @@ class ChunksConfig:
         subsampled_files: list[str] | None = None,
         region_of_interest: list[tuple[int, int]] | None = None,
         storage_options: dict | None = None,
-        session_options: dict | None = {},
+        session_options: dict | None = None,
     ) -> None:
         """Reads the index files associated a chunked dataset and enables to map an index to its chunk.
 
@@ -478,7 +478,7 @@ class ChunksConfig:
         subsampled_files: list[str] | None = None,
         region_of_interest: list[tuple[int, int]] | None = None,
         storage_options: dict | None = None,
-        session_options: dict | None = {},
+        session_options: dict | None = None,
     ) -> Optional["ChunksConfig"]:
         cache_index_filepath = os.path.join(cache_dir, _INDEX_FILENAME)
 

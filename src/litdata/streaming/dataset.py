@@ -74,7 +74,7 @@ class StreamingDataset(IterableDataset):
         subsample: float = 1.0,
         encryption: Encryption | None = None,
         storage_options: dict | None = None,
-        session_options: dict | None = {},
+        session_options: dict | None = None,
         max_pre_download: int = 2,
         index_path: str | None = None,
         force_override_state_dict: bool = False,

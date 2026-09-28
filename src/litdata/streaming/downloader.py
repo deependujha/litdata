@@ -1227,7 +1227,7 @@ def get_downloader(
     cache_dir: str,
     chunks: list[dict[str, Any]],
     storage_options: dict | None = None,
-    session_options: dict | None = {},
+    session_options: dict | None = None,
 ) -> Downloader:
     """Get the appropriate downloader instance based on the remote directory prefix.
 
