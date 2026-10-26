@@ -36,7 +36,7 @@ def isolated_cache_dirs(tmp_path_factory, monkeypatch):
     """
     root = tmp_path_factory.mktemp("litdata-cache")
 
-    monkeypatch.setenv("LITDATA_CACHE_DIR", str(root / "litdata-cache" / "chunks"))
+    monkeypatch.setenv("LITDATA_CACHE_DIR", str(root / "chunks"))
     monkeypatch.delenv("LITDATA_HF_CACHE_DIR", raising=False)
     monkeypatch.setenv("DATA_OPTIMIZER_CACHE_FOLDER", str(root / "optimizer-chunks"))
     monkeypatch.setenv("DATA_OPTIMIZER_DATA_CACHE_FOLDER", str(root / "optimizer-data"))
